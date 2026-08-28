@@ -1,0 +1,14 @@
+# Build output (regenerate with arduino-cli compile)
+build/
+
+# SECRETS - never commit
+.mqtt_creds
+config.json
+
+# macOS
+.DS_Store
+
+# Test binaries
+test/*.out
+test/test_myscale
+test/test_bbw

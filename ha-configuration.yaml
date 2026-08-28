@@ -1,0 +1,389 @@
+# =====================================================================
+# Discreet espresso controller -> Home Assistant (MQTT bridge)
+# Firmware: ~/discreet-mqtt/Discreet_MQTT.ino (flashed over ArduinoOTA)
+# Broker:   mosquitto (user: discreet, see ~/discreet-mqtt/.mqtt_creds)
+# Topics:   discreet/telemetry (1 Hz JSON)  discreet/status (LWT)
+#           discreet/cmd/{setpoint,pressuresetpoint,preinftime,bloomtime,steam,pause}
+# Design:   mirrors the original discreet.local web UI + brew-by-weight
+# =====================================================================
+mqtt:
+  sensor:
+    - name: "Discreet Boiler Temp"
+      unique_id: discreet_boiler_temp
+      state_topic: "discreet/telemetry"
+      value_template: "{{ value_json.temp }}"
+      unit_of_measurement: "°C"
+      device_class: temperature
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    - name: "Discreet Target Temp"
+      unique_id: discreet_target_temp
+      state_topic: "discreet/telemetry"
+      value_template: "{{ value_json.setpoint }}"
+      unit_of_measurement: "°C"
+      device_class: temperature
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    - name: "Discreet Pressure"
+      unique_id: discreet_pressure
+      state_topic: "discreet/telemetry"
+      value_template: "{{ value_json.pressure }}"
+      unit_of_measurement: "bar"
+      device_class: pressure
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    - name: "Discreet Pump Power"
+      unique_id: discreet_pump_power
+      state_topic: "discreet/telemetry"
+      value_template: "{{ value_json.pumppower }}"
+      unit_of_measurement: "%"
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    - name: "Discreet Shot Time"
+      unique_id: discreet_shot_time
+      state_topic: "discreet/telemetry"
+      value_template: "{{ value_json.actime }}"
+      unit_of_measurement: "s"
+      icon: mdi:timer-outline
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    - name: "Discreet Shot State"
+      unique_id: discreet_shot_state
+      state_topic: "discreet/telemetry"
+      value_template: "{{ value_json.shotstate }}"
+      icon: mdi:coffee
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    # --- brew-by-weight ---
+    - name: "Discreet Scale Weight"
+      unique_id: discreet_scale_weight
+      state_topic: "discreet/telemetry"
+      value_template: "{{ value_json.weight }}"
+      unit_of_measurement: "g"
+      device_class: weight
+      state_class: measurement
+      icon: mdi:scale
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    - name: "Discreet Shot Weight"
+      unique_id: discreet_shot_weight
+      state_topic: "discreet/telemetry"
+      value_template: "{{ value_json.shotweight }}"
+      unit_of_measurement: "g"
+      device_class: weight
+      state_class: measurement
+      icon: mdi:coffee-to-go
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    - name: "Discreet Flow Rate"
+      unique_id: discreet_flow_rate
+      state_topic: "discreet/telemetry"
+      value_template: "{{ value_json.flowrate }}"
+      unit_of_measurement: "g/s"
+      state_class: measurement
+      icon: mdi:water-outline
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+  binary_sensor:
+    - name: "Discreet Steam Mode"
+      unique_id: discreet_steam_mode
+      state_topic: "discreet/telemetry"
+      value_template: "{{ 'ON' if value_json.steam else 'OFF' }}"
+      payload_on: "ON"
+      payload_off: "OFF"
+      device_class: heat
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    # --- brew-by-weight ---
+    - name: "Discreet Scale Connected"
+      unique_id: discreet_scale_connected
+      state_topic: "discreet/telemetry"
+      value_template: "{{ 'ON' if value_json.scale == 'connected' else 'OFF' }}"
+      payload_on: "ON"
+      payload_off: "OFF"
+      device_class: connectivity
+      icon: mdi:bluetooth
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    - name: "Discreet BBW Armed"
+      unique_id: discreet_bbw_armed
+      state_topic: "discreet/telemetry"
+      value_template: "{{ 'ON' if value_json.bbwarmed else 'OFF' }}"
+      payload_on: "ON"
+      payload_off: "OFF"
+      icon: mdi:target
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    - name: "Discreet Scale Stable"
+      unique_id: discreet_scale_stable
+      state_topic: "discreet/telemetry"
+      value_template: "{{ 'ON' if value_json.scalestable else 'OFF' }}"
+      payload_on: "ON"
+      payload_off: "OFF"
+      icon: mdi:scale-balance
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+  number:
+    - name: "Discreet Target Temp"
+      unique_id: discreet_target_temp_number
+      command_topic: "discreet/cmd/setpoint"
+      state_topic: "discreet/telemetry"
+      value_template: "{{ value_json.setpoint }}"
+      min: 80
+      max: 96
+      step: 0.5
+      unit_of_measurement: "°C"
+      mode: slider
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    - name: "Discreet Pressure Setpoint"
+      unique_id: discreet_pressure_setpoint
+      command_topic: "discreet/cmd/pressuresetpoint"
+      state_topic: "discreet/telemetry"
+      value_template: "{{ value_json.pressuresetpoint }}"
+      min: 3
+      max: 13
+      step: 0.5
+      unit_of_measurement: "bar"
+      mode: slider
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    - name: "Discreet Pre-infusion Time"
+      unique_id: discreet_preinf_time
+      command_topic: "discreet/cmd/preinftime"
+      state_topic: "discreet/telemetry"
+      value_template: "{{ value_json.preinftime }}"
+      min: 0
+      max: 20
+      step: 1
+      unit_of_measurement: "s"
+      mode: slider
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    - name: "Discreet Bloom Time"
+      unique_id: discreet_bloom_time
+      command_topic: "discreet/cmd/bloomtime"
+      state_topic: "discreet/telemetry"
+      value_template: "{{ value_json.bloomtime }}"
+      min: 0
+      max: 20
+      step: 1
+      unit_of_measurement: "s"
+      mode: slider
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    - name: "Discreet PID Kp"
+      unique_id: discreet_pid_kp
+      command_topic: "discreet/cmd/kp"
+      state_topic: "discreet/telemetry"
+      value_template: "{{ value_json.Kp }}"
+      min: 0
+      max: 200
+      step: 1
+      mode: slider
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    - name: "Discreet PID Ki"
+      unique_id: discreet_pid_ki
+      command_topic: "discreet/cmd/ki"
+      state_topic: "discreet/telemetry"
+      value_template: "{{ value_json.Ki }}"
+      min: 0
+      max: 50
+      step: 0.5
+      mode: slider
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    - name: "Discreet PID Kd"
+      unique_id: discreet_pid_kd
+      command_topic: "discreet/cmd/kd"
+      state_topic: "discreet/telemetry"
+      value_template: "{{ value_json.Kd }}"
+      min: 0
+      max: 100
+      step: 1
+      mode: slider
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    - name: "Discreet Steam Temp"
+      unique_id: discreet_steam_temp
+      command_topic: "discreet/cmd/steamsetpoint"
+      state_topic: "discreet/telemetry"
+      value_template: "{{ value_json.steamsetpoint }}"
+      min: 110
+      max: 160
+      step: 1
+      unit_of_measurement: "°C"
+      mode: slider
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    # --- brew-by-weight ---
+    - name: "Discreet Target Weight"
+      unique_id: discreet_target_weight
+      command_topic: "discreet/cmd/targetweight"
+      state_topic: "discreet/telemetry"
+      value_template: "{{ value_json.targetweight }}"
+      min: 0
+      max: 100
+      step: 0.5
+      unit_of_measurement: "g"
+      mode: box
+      icon: mdi:target
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+  switch:
+    - name: "Discreet Steam Mode"
+      unique_id: discreet_steam_switch
+      command_topic: "discreet/cmd/steam"
+      state_topic: "discreet/telemetry"
+      value_template: "{{ 'ON' if value_json.steam else 'OFF' }}"
+      payload_on: "ON"
+      payload_off: "OFF"
+      state_on: "ON"
+      state_off: "OFF"
+      icon: mdi:weather-steam
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    - name: "Discreet PID-Only Mode"
+      unique_id: discreet_pid_only
+      command_topic: "discreet/cmd/pidonly"
+      state_topic: "discreet/telemetry"
+      value_template: "{{ 'ON' if value_json.PIDonly else 'OFF' }}"
+      payload_on: "ON"
+      payload_off: "OFF"
+      state_on: "ON"
+      state_off: "OFF"
+      icon: mdi:thermometer-lines
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    # --- brew-by-weight master switch ---
+    - name: "Discreet Brew By Weight"
+      unique_id: discreet_brew_by_weight
+      command_topic: "discreet/cmd/bbw"
+      state_topic: "discreet/telemetry"
+      value_template: "{{ 'ON' if value_json.bbw else 'OFF' }}"
+      payload_on: "ON"
+      payload_off: "OFF"
+      state_on: "ON"
+      state_off: "OFF"
+      icon: mdi:scale
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+  button:
+    - name: "Discreet Save Config"
+      unique_id: discreet_save_config
+      command_topic: "discreet/cmd/save"
+      payload_press: "save"
+      icon: mdi:content-save
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+    # --- brew-by-weight ---
+    - name: "Discreet Tare Scale"
+      unique_id: discreet_tare_scale
+      command_topic: "discreet/cmd/tare"
+      payload_press: "tare"
+      icon: mdi:scale-balance
+      availability_topic: "discreet/status"
+      payload_available: "online"
+      payload_not_available: "offline"
+
+# ---------------------------------------------------------------------
+# Formatted shot timer (mm:ss) for display - source of truth is the
+# raw sensor.discreet_shot_time (firmware actime field).
+# ---------------------------------------------------------------------
+template:
+  - sensor:
+      - name: "Discreet Shot Timer"
+        unique_id: discreet_shot_timer
+        state: "{{ '%02d:%02d' | format((states('sensor.discreet_shot_time') | int(0)) // 60, (states('sensor.discreet_shot_time') | int(0)) % 60) }}"
+        icon: mdi:timer-outline
+        availability: "{{ states('sensor.discreet_shot_time') not in ['unknown', 'unavailable'] }}"
+
+      - name: "Discreet Total Shots"
+        unique_id: discreet_total_shots
+        state: "{{ states('counter.discreet_lifetime_shots') }}"
+        unit_of_measurement: "shots"
+        state_class: total_increasing
+        icon: mdi:coffee-outline
+        availability: "{{ states('counter.discreet_lifetime_shots') not in ['unknown', 'unavailable'] }}"
+
+# ---------------------------------------------------------------------
+# Lifetime shot counter.
+# Backfilled from recorder history: 26 shots since MQTT telemetry began
+# (2026-08-17: 14, 2026-08-18: 12). The automation increments it on every
+# shot start (sensor.discreet_shot_state leaves idle -> preinfusion /
+# extraction / bloom). restore: true (default) keeps the count across HA
+# restarts; initial only applies at first creation.
+# ---------------------------------------------------------------------
+counter:
+  discreet_lifetime_shots:
+    name: "Discreet Lifetime Shots"
+    icon: mdi:coffee-outline
+    initial: 26
+    step: 1
+
+automation:
+  - id: discreet_count_shot
+    alias: "Discreet: count each shot"
+    trigger:
+      - platform: state
+        entity_id: sensor.discreet_shot_state
+        to: ["preinfusion", "extraction", "bloom"]
+        from: ["idle", "unknown", "unavailable"]
+    action:
+      - service: counter.increment
+        target:
+          entity_id: counter.discreet_lifetime_shots
+    mode: single

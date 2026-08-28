@@ -1,0 +1,233 @@
+# =====================================================================
+# Discreet espresso controller dashboard
+# Recreates the original discreet.local web UI in Lovelace.
+# Two views (mobile-friendly sections layout, auto-collapses to one
+# column on narrow screens):
+#   main     - title, pressure gauge, readouts, temperature graph,
+#              control steppers (brew temp / pressure / pre-infusion /
+#              bloom), brew/steam mode
+#   settings - editable PID values (Kp/Ki/Kd, runtime-only)
+# Entities come from packages/discreet.yaml (MQTT bridge).
+# =====================================================================
+views:
+  - title: Main
+    icon: mdi:coffee
+    path: main
+    type: sections
+    max_columns: 2
+    sections:
+      # -- Title (mirrors the original glowing gold h1) --
+      - type: grid
+        column_span: 2
+        cards:
+          - type: markdown
+            content: >
+              <h1 style="font-family:'Courier New',Courier,monospace;font-size:clamp(14px,5vw,28px);font-weight:700;letter-spacing:0.35em;text-transform:uppercase;text-align:center;color:#f0c040;text-shadow:0 0 20px rgba(240,192,64,0.6),0 0 60px rgba(240,192,64,0.2);margin:0">Discreet Coffee</h1>
+
+      # -- Big pressure gauge (0-12 bar, needle, zone colors like the original) --
+      - type: grid
+        cards:
+          - type: gauge
+            entity: sensor.discreet_pressure
+            name: Pressure
+            unit: bar
+            min: 0
+            max: 12
+            needle: true
+            severity:
+              green: 0
+              yellow: 3
+              red: 7
+
+      # -- Readouts: "X Bar  Y Pump Power" + shot timer + state --
+      - type: grid
+        cards:
+          - type: entities
+            state_color: true
+            entities:
+              - sensor.discreet_pressure
+              - sensor.discreet_pump_power
+              - sensor.discreet_shot_timer
+              - sensor.discreet_shot_state
+
+      # -- Temperature Graph (temp + target + pressure) --
+      - type: grid
+        column_span: 2
+        cards:
+          - type: history-graph
+            title: Temperature Graph
+            hours_to_show: 1
+            refresh_interval: 5
+            entities:
+              - sensor.discreet_boiler_temp
+              - sensor.discreet_target_temp
+              - sensor.discreet_pressure
+
+      # -- Shot Timer (big gold display, like the original page's
+      #    "Shot Timer: N seconds" line under the chart) --
+      - type: grid
+        column_span: 2
+        cards:
+          - type: markdown
+            content: >
+              <div style="font-family:'Courier New',Courier,monospace;font-size:0.7rem;font-weight:700;letter-spacing:0.25em;text-transform:uppercase;text-align:center;color:#887060">Shot Timer</div>
+              <div style="font-family:'Courier New',Courier,monospace;font-size:3.5em;font-weight:700;text-align:center;color:#f0c040;text-shadow:0 0 20px rgba(240,192,64,0.4);margin-top:4px">{{ '%02d:%02d' | format((states('sensor.discreet_shot_time') | int(0)) // 60, (states('sensor.discreet_shot_time') | int(0)) % 60) }}</div>
+
+      # -- Stepper blocks: Brew Temp / P-Infusion / Pressure / Bloom --
+      - type: grid
+        column_span: 2
+        cards:
+          - type: entities
+            title: Control
+            state_color: true
+            entities:
+              - number.discreet_target_temp
+              - number.discreet_pressure_setpoint
+              - number.discreet_pre_infusion_time
+              - number.discreet_bloom_time
+
+      # -- Brew by weight: live weight, target, arm state --
+      # Big gold number mirrors the Shot Timer treatment. The badge line
+      # tells you at a glance whether this shot will auto-stop:
+      #   ARMED - auto-stop active | NO SCALE - MANUAL | BBW OFF
+      - type: grid
+        column_span: 2
+        cards:
+          - type: markdown
+            content: >
+              <div style="font-family:'Courier New',Courier,monospace;font-size:0.7rem;font-weight:700;letter-spacing:0.25em;text-transform:uppercase;text-align:center;color:#887060">Weight</div>
+              <div style="font-family:'Courier New',Courier,monospace;font-size:3.5em;font-weight:700;text-align:center;color:#f0c040;text-shadow:0 0 20px rgba(240,192,64,0.4);margin-top:4px">{{ states('sensor.discreet_scale_weight') | float(0) | round(1) }}<span style="font-size:0.35em;color:#887060"> g</span></div>
+              {% if not is_state('switch.discreet_brew_by_weight','on') %}
+              <div style="font-family:'Courier New',Courier,monospace;font-size:0.7rem;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;text-align:center;color:#887060;margin-top:2px">BBW Off</div>
+              {% elif is_state('binary_sensor.discreet_bbw_armed','on') %}
+              <div style="font-family:'Courier New',Courier,monospace;font-size:0.7rem;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;text-align:center;color:#7ac943;margin-top:2px">Armed &middot; auto-stop at {{ states('number.discreet_target_weight') | float(0) | round(1) }} g</div>
+              {% elif is_state('binary_sensor.discreet_scale_connected','on') %}
+              <div style="font-family:'Courier New',Courier,monospace;font-size:0.7rem;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;text-align:center;color:#f0c040;margin-top:2px">Scale ready &middot; target {{ states('number.discreet_target_weight') | float(0) | round(1) }} g</div>
+              {% else %}
+              <div style="font-family:'Courier New',Courier,monospace;font-size:0.7rem;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;text-align:center;color:#e05c4a;margin-top:2px">No scale &middot; manual shot</div>
+              {% endif %}
+              <div style="font-family:'Courier New',Courier,monospace;font-size:0.65rem;text-align:center;color:#887060;margin-top:2px">last shot {{ states('sensor.discreet_shot_weight') | float(0) | round(1) }} g &middot; flow {{ states('sensor.discreet_flow_rate') | float(0) | round(2) }} g/s</div>
+
+      - type: grid
+        column_span: 2
+        cards:
+          - type: entities
+            title: Brew by Weight
+            state_color: true
+            entities:
+              - entity: switch.discreet_brew_by_weight
+                name: Enable auto-stop
+              - entity: number.discreet_target_weight
+                name: Target weight
+              - entity: sensor.discreet_scale_weight
+                name: Live weight
+              - entity: sensor.discreet_shot_weight
+                name: Last shot yield
+              - entity: sensor.discreet_flow_rate
+                name: Flow rate
+              - entity: binary_sensor.discreet_scale_connected
+                name: Scale connected
+              - entity: binary_sensor.discreet_bbw_armed
+                name: Armed this shot
+              - entity: button.discreet_tare_scale
+                name: Tare scale
+
+      # -- Weight + flow curve for the shot you just pulled --
+      - type: grid
+        column_span: 2
+        cards:
+          - type: history-graph
+            title: Weight & Flow
+            hours_to_show: 1
+            refresh_interval: 5
+            entities:
+              - sensor.discreet_scale_weight
+              - sensor.discreet_flow_rate
+
+      # -- Mode: Brew / Steam --
+      - type: grid
+        column_span: 2
+        cards:
+          - type: entities
+            title: Mode
+            state_color: true
+            entities:
+              - switch.discreet_steam_mode
+
+  - title: Settings
+    icon: mdi:cog
+    path: settings
+    type: sections
+    max_columns: 2
+    sections:
+      - type: grid
+        column_span: 2
+        cards:
+          - type: markdown
+            content: >
+              <h2 style="font-family:'Courier New',Courier,monospace;font-size:0.9rem;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;text-align:center;color:#e8e0d0;margin:0">PID Tuning</h2>
+              <p style="font-family:'Courier New',Courier,monospace;font-size:12px;color:#887060;text-align:center;margin:6px 0 0">Changes apply immediately to the running controller. Runtime-only: use <b>Save Config</b> to write them to config.json on the SD card (survives reboot).</p>
+
+      - type: grid
+        column_span: 2
+        cards:
+          - type: entities
+            title: PID Values
+            state_color: true
+            entities:
+              - number.discreet_pid_kp
+              - number.discreet_pid_ki
+              - number.discreet_pid_kd
+
+      - type: grid
+        column_span: 2
+        cards:
+          - type: entities
+            title: System
+            state_color: true
+            entities:
+              - switch.discreet_pid_only_mode
+              - number.discreet_steam_temp
+              - button.discreet_save_config
+
+  - title: Statistics
+    icon: mdi:chart-bar
+    path: statistics
+    type: sections
+    max_columns: 2
+    sections:
+      # -- Lifetime shot counter (backfilled from recorder history) --
+      - type: grid
+        column_span: 2
+        cards:
+          - type: markdown
+            content: >
+              <div style="font-family:'Courier New',Courier,monospace;font-size:0.7rem;font-weight:700;letter-spacing:0.25em;text-transform:uppercase;text-align:center;color:#887060">Lifetime Shots</div>
+              <div style="font-family:'Courier New',Courier,monospace;font-size:3.5em;font-weight:700;text-align:center;color:#f0c040;text-shadow:0 0 20px rgba(240,192,64,0.4);margin-top:4px">{{ states('counter.discreet_lifetime_shots') }}</div>
+              <div style="font-family:'Courier New',Courier,monospace;font-size:0.65rem;text-align:center;color:#887060;margin-top:2px">since 16 Aug 2026 (MQTT telemetry era) · backfilled 26 · counts every new shot automatically</div>
+
+      # -- Usage rows --
+      - type: grid
+        column_span: 2
+        cards:
+          - type: entities
+            title: Usage
+            state_color: true
+            entities:
+              - counter.discreet_lifetime_shots
+              - sensor.discreet_total_shots
+              - sensor.discreet_shot_state
+
+      # -- Shots per day (accrues from today onward) --
+      - type: grid
+        column_span: 2
+        cards:
+          - type: statistics-graph
+            title: Shots per Day
+            entities:
+              - sensor.discreet_total_shots
+            chart_type: bar
+            period: day
+            days_to_show: 30
+            statistics_types:
+              - change

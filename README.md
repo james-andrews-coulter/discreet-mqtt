@@ -1,0 +1,310 @@
+# Discreet -> Home Assistant (MQTT conversion + brew-by-weight)
+
+Replaces the stock Discreet web UI (served from SD card) with a Home
+Assistant dashboard, and adds **brew-by-weight** using a `MY_SCALE`
+Bluetooth kitchen scale. The ESP32 talks to HA over MQTT and to the scale
+over BLE. No custom HA components, no 30-second polling, live 1 Hz
+telemetry.
+
+## Architecture (two brains, one control surface)
+
+- **ESP32 inside the machine** (this firmware): PID, pressure profiling,
+  shot logic, and the BLE *central* that reads the scale. Nothing about
+  the machine depends on the scale - forget the scale and it's exactly
+  the manual machine you have today.
+- **BLE scale on the drip tray**: standalone, battery-powered, stock
+  firmware. It notifies weight over BLE and the ESP32 reads it.
+- **Home Assistant**: the dashboard. Sets targets, shows state, records
+  history. The shot loop itself always runs on the ESP32.
+
+## Files
+
+- `Discreet_MQTT.ino`  - firmware (MQTT + BLE scale client)
+- `ha-configuration.yaml` - MQTT entity definitions (merge into HA)
+- `dashboard.yaml`     - Lovelace dashboard (import from YAML)
+- `docs/my-scale-ble-protocol.md` - **verified** BLE protocol for the scale
+- `docs/upstream/` - reference implementations (GaggiMate, MIT-licensed)
+- `test/` - host-side unit tests (no hardware needed)
+
+## THE SCALE (read this first)
+
+The scale in this build is **not** a WeighMyBru and does **not** speak the
+Bean Conqueror / Nordic-UART protocol. It was identified by live GATT
+enumeration on 2026-08-28:
+
+| | |
+|---|---|
+| Advertised name | `MY_SCALE` |
+| Service | `0000FFB0-0000-1000-8000-00805F9B34FB` |
+| Weight notify char | `0000FFB2-...` (20-byte packets, ~6.7 Hz) |
+| Command write char | `0000FFB1-...` (write-without-response) |
+| Chipset | TI CC254x (exposes the TI OAD service `F000FFC0`) |
+
+Weight is a **28-bit big-endian value in milligrams** spanning
+`(byte3 & 0x0F), byte4, byte5, byte6`, with the sign in the high nibble of
+byte 2 and a stable/settled flag in its low nibble. Packets start `AC 40`.
+
+This protocol is supported by two independent open-source projects, and
+this firmware's decode was cross-checked against **both**:
+
+- GaggiMate `esp-arduino-ble-scales/src/scales/myscale.cpp` (MIT)
+- Bean Conqueror `src/classes/devices/blackcoffeeScale.ts` (as
+  `blackcoffee` / `my_scale`)
+
+Full byte tables, the live capture, and citations: `docs/my-scale-ble-protocol.md`.
+
+### Taring
+
+Bean Conqueror declares this scale cannot tare. GaggiMate ships a working
+tare frame (`AC 40 00 ... 00 D2 D2`). This firmware does **both**, because
+we cannot know in advance which is true for your unit:
+
+1. sends the hardware tare frame, then
+2. **400 ms later** records a **software tare offset** - the reading at
+   that moment is subtracted from everything after it.
+
+The delay matters. If the offset were sampled immediately and the scale
+*did* honour the frame, the reading would drop to ~0 while the offset still
+held the old cup weight, so net weight would read about **-312 g** and the
+shot would never cut. Sampling after a settle window is correct in *both*
+cases:
+
+| | scale honours tare | scale ignores tare |
+|---|---|---|
+| reading at sample time | ~0 g | 312 g (cup) |
+| offset recorded | ~0 g | 312 g |
+| net weight | 0 g ✓ | 0 g ✓ |
+
+It is non-blocking (serviced from `loop()`, never a `delay()`), and the cut
+logic is suppressed while a tare is settling. `weight` in telemetry is
+always the *net* (tared) value. Regression-tested in
+`test/test_myscale_parse.c` section 8.
+
+## 1. Firmware
+
+1. Open `Discreet_MQTT.ino` in Arduino IDE (or PlatformIO).
+2. Toolchain that is VERIFIED to compile this sketch:
+   - ESP32 Arduino core **2.0.17** (NOT 3.x - binary overflows the OTA slot)
+   - **NimBLE-Arduino 1.4.3** (NOT 2.x - API differences)
+   - PubSubClient, Dimmable Light for Arduino 1.6.0, MAX6675 (Rob Tillaart),
+     PID (Brett Beauregard), ArduinoJson
+   - CLI: `arduino-cli compile --fqbn esp32:esp32:esp32 Discreet_MQTT`
+3. Add the MQTT + scale keys to `config.json` on the SD card:
+
+```json
+{
+  "ssid": "your_wifi_name",
+  "password": "your_wifi_password",
+  "mqtt_host": "192.168.1.50",
+  "mqtt_port": 1883,
+  "mqtt_user": "mqttuser",
+  "mqtt_pass": "mqttpass",
+  "target_weight": 36.0,
+  "bbw_enabled": true,
+  "cut_on_scale_loss": false
+}
+```
+
+   - `target_weight` - grams to auto-cut at (default 36)
+   - `bbw_enabled` - master switch for brew-by-weight (default true)
+   - `cut_on_scale_loss` - `true` = hard-cut the pump if the scale dies
+     mid-shot (accept a possibly-short shot); `false` (default) = beep
+     and continue manually. Existing Kp/Ki/Kd/setpoint/offset keys still
+     load as before.
+4. Flash via USB, later via ArduinoOTA (hostname `Discreet`, password
+   `Discreet`).
+
+> BUILD STATUS (Aug 28, 2026): COMPILED with arduino-cli 1.5.1 + ESP32 core
+> **2.0.17** + NimBLE-Arduino **1.4.3**.
+> Binary: **1,136,021 bytes = 86%** of the 1.25 MB OTA app slot.
+> RAM 60,488 B (18%).
+> Not yet flashed or bench-tested against the machine - see
+> "Bench test" below.
+
+### ⚠ Flashing: do NOT just pick the first device on port 3232
+
+**Other ESP32s on this LAN also listen on OTA port 3232.** In particular
+`192.168.0.166` is the **ss-xiao garden waterer** (ESPHome), which is *not*
+the espresso machine. A naive "scan for 3232 and flash it" would overwrite
+that device's firmware.
+
+`flash-discreet.sh` therefore verifies identity before offering a target:
+
+1. **denylist** of known-other ESP32 IPs - the only check that still works
+   when that device is offline (ss-xiao has an intermittent 5V press-fit
+   header fault and drops off the network, so it may be absent during the
+   scan and back later);
+2. **port 6053 closed** - ESPHome exposes its native API there, the Discreet
+   Arduino firmware never does. This is the reliable discriminator; note
+   ss-xiao has no `web_server`, so checking port 80 alone is NOT enough;
+3. **port 80 closed** - the MQTT conversion removed the web server;
+4. **positive confirmation** - requires a live `discreet/telemetry` packet on
+   the broker (also reused for the mid-shot safety check). If it cannot be
+   confirmed, the script says so loudly before the final prompt;
+5. refuses to guess if multiple candidates survive.
+
+If you add another ESP32 to the LAN, add its IP to `DENY_IPS` in the script.
+
+## Predictive cut (why yield lands on target)
+
+Naively cutting when `weight >= target` always overshoots: the scale only
+notifies every 150 ms, and the puck keeps dripping after the pump stops.
+
+This firmware measures the **actual flow rate** from the weight curve and
+cuts early by `flowRate * BBW_LEAD_TIME_S` (default 0.35 s), clamped to
+`BBW_MAX_LEAD_G` (3 g) so a noisy reading can never cut absurdly early.
+
+Simulated over realistic shot curves (`test/test_bbw_logic.c`):
+
+| Shot | Naive settled | Predictive settled |
+|---|---|---|
+| 36 g target, 2.0 g/s, 0.7 g drip | 37.00 g (+1.00) | **36.05 g (+0.05)** |
+| gusher 3.5 g/s, 1.2 g drip | - | 36.30 g (+0.30) |
+| choked 0.8 g/s, 0.3 g drip | - | 36.04 g (+0.04) |
+
+**Tuning:** if your shots consistently overshoot, raise `BBW_LEAD_TIME_S`;
+if they come up short, lower it. It's a single `#define` near the top of
+the sketch.
+
+## Tests (run these - they need no hardware)
+
+```
+cd test
+cc -Wall -Wextra -O2 -o /tmp/test_myscale test_myscale_parse.c -lm && /tmp/test_myscale
+cc -Wall -Wextra -O2 -o /tmp/test_bbw     test_bbw_logic.c    -lm && /tmp/test_bbw
+```
+
+- `test_myscale_parse.c` - **65 assertions**. Parses the REAL captured
+  packet, cross-checks our decode against GaggiMate's and Bean
+  Conqueror's implementations on every case, and covers sign nibbles,
+  stability flag, malformed/hostile input, the byte-3 nibble mask, the
+  deferred-tare regression, and the falsified trailer-checksum hypotheses.
+- `test_bbw_logic.c` - **19 assertions**. Replays realistic shot curves
+  through the exact cut algorithm; asserts yield accuracy, the lead
+  clamp, and every safety rule (unarmed never cuts, cut latches once,
+  negative weight never cuts, missing cup never cuts).
+
+Both suites pass: **84/84**.
+
+> Note on the trailer bytes: GaggiMate defines a `calculateChecksum()`
+> ("sum of all bytes except the last") but never calls it. Do **not** add
+> checksum validation — tested against the real packet, every sum/XOR
+> hypothesis fails, so validating would reject every genuine packet and the
+> scale would look dead. Test section 9 locks this in. Validity = `AC 40`
+> header + length.
+
+## 2. Bench test the scale (do this before trusting a shot)
+
+Serial monitor at 115200 should show, in order:
+
+```
+BLE scale task started
+Scale connected (MY_SCALE FFB0)      <- after you WAKE the scale
+```
+
+**The scale deep-sleeps aggressively** (verified: it stopped advertising
+within ~2-3 min of idle, repeatedly, and is completely undiscoverable
+once asleep). Wake it before a shot or BBW simply won't arm.
+
+Checks worth doing once:
+- press on the scale -> `weight` climbs in MQTT telemetry
+- press the **Tare Scale** button in HA -> weight returns to ~0
+- real pull -> `BBW armed (tare offset X, target Y)` at shot start,
+  `BBW cut at 36.0g (target 36.0, lead 0.70, flow 2.00 g/s)` at the cut
+- scale off at shot start -> `BBW NOT armed - no scale` + warning beeps,
+  shot runs manual
+- scale dies mid-shot -> `Scale silent >3s - dropping link` then
+  `Scale lost mid-shot - manual mode`, shot continues, no stale-weight cut
+- cup missing -> weight ~0, no cut, obvious on the dashboard
+
+## 3. Home Assistant
+
+1. Add the **Mosquitto broker** add-on; enable the MQTT integration.
+2. Merge the `mqtt:` block from `ha-configuration.yaml` into your
+   `configuration.yaml` (or `packages/`). Restart HA.
+3. Reload MQTT / wait ~1 min: entities appear, including the new ones -
+   `sensor.discreet_scale_weight`, `sensor.discreet_shot_weight`,
+   `sensor.discreet_flow_rate`, `binary_sensor.discreet_scale_connected`,
+   `binary_sensor.discreet_bbw_armed`, `binary_sensor.discreet_scale_stable`,
+   `number.discreet_target_weight`, `switch.discreet_brew_by_weight`,
+   `button.discreet_tare_scale`.
+4. Create the dashboard from `dashboard.yaml` (add dashboard -> new
+   dashboard from YAML). Adjust entity ids if HA renamed them.
+
+The Main view gains a big gold **Weight** readout with a status line that
+reads `Armed - auto-stop at 36 g`, `Scale ready`, `No scale - manual
+shot`, or `BBW Off`, plus a Brew by Weight control block and a
+weight/flow history graph.
+
+## MQTT topic reference
+
+| Topic                          | Direction   | Payload                            |
+|--------------------------------|-------------|------------------------------------|
+| `discreet/status`              | ESP32 -> HA | `online` / `offline` (LWT)         |
+| `discreet/telemetry`           | ESP32 -> HA | JSON, 1 Hz (below)                 |
+| `discreet/cmd/setpoint`        | HA -> ESP32 | brew temp °C e.g. `93.5`           |
+| `discreet/cmd/pressuresetpoint`| HA -> ESP32 | bar, `3`-`13`                      |
+| `discreet/cmd/preinftime`      | HA -> ESP32 | seconds `0`-`20`                   |
+| `discreet/cmd/bloomtime`       | HA -> ESP32 | seconds `0`-`20`                   |
+| `discreet/cmd/steam`           | HA -> ESP32 | `ON` / `OFF`                       |
+| `discreet/cmd/pause`           | HA -> ESP32 | `ON` / `OFF`                       |
+| `discreet/cmd/targetweight`    | HA -> ESP32 | grams `0`-`100` e.g. `36.5`        |
+| `discreet/cmd/bbw`             | HA -> ESP32 | `ON` / `OFF` (master switch)       |
+| `discreet/cmd/tare`            | HA -> ESP32 | any payload - tare the scale now   |
+| `discreet/cmd/kp`              | HA -> ESP32 | PID Kp (applied live via SetTunings)|
+| `discreet/cmd/ki`              | HA -> ESP32 | PID Ki (applied live via SetTunings)|
+| `discreet/cmd/kd`              | HA -> ESP32 | PID Kd (applied live via SetTunings)|
+| `discreet/cmd/pidonly`         | HA -> ESP32 | `ON`/`OFF` - PID-only mode (disables shot logic) |
+| `discreet/cmd/steamsetpoint`   | HA -> ESP32 | steam target temp °C (110-160)     |
+| `discreet/cmd/save`            | HA -> ESP32 | any payload - writes current runtime settings to config.json on SD (survives reboot) |
+
+Telemetry JSON: `temp`, `setpoint`, `pressure`, `pumppower`,
+`pressuresetpoint`, `preinftime`, `bloomtime`, `actime`, `shotstate`,
+`steam`, `paused`, `Kp`, `Ki`, `Kd`, `PIDonly`, `steamsetpoint`, plus
+scale fields: `weight` (live NET grams), `targetweight`, `shotweight`
+(net grams at the cut), `bbw` (enabled), `bbwarmed`, `scale`
+(`connected`/`offline`), `scalestable`, `flowrate` (g/s).
+
+## Brew-by-weight rules
+
+1. **Scale off / asleep at shot start** -> normal manual shot, warning
+   beeps, dashboard shows scale offline. Never blocks or delays a shot.
+2. **Scale connects mid-shot** -> BBW does NOT arm (the tare offset would
+   be wrong, silently moving the target). It only arms when connected
+   AND tared at shot start.
+3. **Scale dies mid-shot** -> loud beeps, shot continues manually. No
+   cut on stale weight by default; `cut_on_scale_loss: true` opts into
+   hard safety. A **stale-data watchdog** drops the link after 3 s of
+   silence, so a sleeping scale can never freeze the weight and trigger
+   a bogus cut.
+4. **Cup not on scale** -> weight reads ~0, no cut, obvious on the
+   dashboard while the shot runs.
+5. The auto-tare at shot start means you never touch the scale: wake it,
+   put the cup on, pull the shot.
+
+## Caveats
+
+- **Shot control stays on the ESP32.** HA and the scale only monitor and
+  set targets. The 50 ms pressure loop, pre-infusion/bloom sequencing
+  and the weight cut all run on-device - same architecture as Gaggiuino.
+- **BLE scanning vs WiFi**: scanning runs in its own FreeRTOS task so it
+  can never stall the control loop. BLE/WiFi coexist fine on the classic
+  ESP32; you may see slight WiFi latency blips during scans, harmless.
+- **Scale must be awake.** It deep-sleeps within a couple of minutes.
+- **Temp number range** (80-96 °C) is exact at the default `offset` of 9.
+- **NimBLE-Arduino version**: 2.x needs Arduino core 3.x, 1.4.x needs
+  core 2.x. The dimmer library pins the core to 2.x, so use NimBLE 1.4.3.
+- A single BLE client object is reused across reconnects: NimBLE 1.4.3
+  caps simultaneous clients, and creating one per attempt leaks them.
+
+## Not yet done
+
+- **Flash + bench test.** The firmware compiles but has not been flashed;
+  the machine was not reachable on the network during this work.
+- **Confirm the milligram scale factor against a known mass.** Both
+  reference implementations divide by 1000 and the captured zero packet is
+  consistent, but a single reading of a known weight would make it
+  certain. Put e.g. a 500 g mass on the scale and check the dashboard
+  reads 500.0.
+- `FFB1` command bytes beyond tare, and the byte 18-19 checksum, remain
+  undocumented. Neither is needed.
