@@ -169,10 +169,10 @@ the sketch.
 ## Tests (run these - they need no hardware)
 
 ```
-cd test
-cc -Wall -Wextra -O2 -o /tmp/test_myscale test_myscale_parse.c -lm && /tmp/test_myscale
-cc -Wall -Wextra -O2 -o /tmp/test_bbw     test_bbw_logic.c    -lm && /tmp/test_bbw
+cd test && ./run-tests.sh
 ```
+
+Compiles both suites with `-Wall -Wextra -Werror -O2` and runs them.
 
 - `test_myscale_parse.c` - **65 assertions**. Parses the REAL captured
   packet, cross-checks our decode against GaggiMate's and Bean
