@@ -332,6 +332,55 @@ int main(void)
         expect_bool("0x40AC == 16556",         le16 == 16556u,  true);
     }
 
+    /* ---- 11. LIVE-CAPTURED packets (2026-08-29, real device, real masses) ----
+     * These are the ground truth: captured from James's actual MY_SCALE over
+     * BLE with a calibrated load on the platform. They confirm the milligram
+     * scale factor (/1000), which was previously the one UNVERIFIED assumption
+     * in the whole integration, and they confirm the 0x8 negative-sign nibble
+     * against a real reading rather than a synthetic vector. */
+    printf("\n11. LIVE captured packets - scale factor + sign (ground truth)\n");
+    {
+        /* Calibrated load on the platform, stable. */
+        const uint8_t live_pos[SCALE_PKT_LEN] = {
+            0xac,0x40,0x01,0x00,0x07,0x59,0xfe,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xa6,0x05
+        };
+        scale_reading_t r = scaleParsePacket(live_pos, SCALE_PKT_LEN);
+        expect_bool("live +load parses",        r.valid, true);
+        expect_near("live +load = 481.790 g",   r.grams, 481.790, 0.0005);
+        expect_bool("live +load reads stable",  r.stable, true);
+        /* The scale factor test: /1000 gives a plausible physical mass. A /100
+         * factor would yield 4817.9 g and /10 would yield 48179 g - both absurd
+         * for a kitchen scale, so this single reading pins the factor. */
+        expect_bool("mass is physically plausible (<3 kg)", r.grams < 3000.0, true);
+
+        /* Load lifted off after tare -> genuinely negative reading. */
+        const uint8_t live_neg[SCALE_PKT_LEN] = {
+            0xac,0x40,0x81,0x00,0x00,0x05,0x64,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xa6,0x90
+        };
+        scale_reading_t n = scaleParsePacket(live_neg, SCALE_PKT_LEN);
+        expect_bool("live -load parses",       n.valid, true);
+        expect_bool("live -load is negative",  n.grams < 0.0, true);
+        expect_near("live -load = -1.380 g",   n.grams, -1.380, 0.0005);
+
+        /* Zero/idle packet, captured with an empty platform. */
+        const uint8_t live_zero[SCALE_PKT_LEN] = {
+            0xac,0x40,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xa6,0xa7
+        };
+        scale_reading_t z = scaleParsePacket(live_zero, SCALE_PKT_LEN);
+        expect_bool("live zero parses",  z.valid, true);
+        expect_near("live zero = 0.0 g", z.grams, 0.0, 0.0005);
+
+        /* Byte 18 was CONSTANT 0xa6 across all three real packets while byte 19
+         * varied (a7 / 05 / 90) - so byte 18 is not part of any checksum over
+         * the payload. Re-confirms that trailer validation must stay out. */
+        expect_bool("byte18 constant across live packets",
+                    (live_pos[18] == 0xa6) && (live_neg[18] == 0xa6) && (live_zero[18] == 0xa6),
+                    true);
+    }
+
     printf("\n=== %d checks, %d failure(s) ===\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

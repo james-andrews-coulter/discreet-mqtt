@@ -82,34 +82,44 @@ verify_is_discreet() {
 }
 
 if [ -z "$IP" ]; then
-  echo "scanning the LAN for an ArduinoOTA device on port $OTA_PORT..."
-  echo "NOTE: other ESP32s (ESPHome) also use 3232 - each candidate is verified."
-  SUBNET=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en8 2>/dev/null)
-  [ -n "$SUBNET" ] || die "could not determine your LAN address; pass the IP explicitly"
-  BASE="${SUBNET%.*}"
-  echo "  subnet ${BASE}.0/24"
-  CANDIDATES=()
-  for i in $(seq 2 254); do
-    if nc -z -G 1 "${BASE}.$i" "$OTA_PORT" 2>/dev/null; then
-      echo "  port $OTA_PORT open at ${BASE}.$i - verifying..."
-      if verify_is_discreet "${BASE}.$i"; then
-        CANDIDATES+=("${BASE}.$i")
-      fi
+  # PRIMARY: mDNS. ArduinoOTA advertises _arduino._tcp and the Discreet
+  # firmware sets hostname "discreet", so discreet.local resolves directly.
+  #
+  # Do NOT scan with `nc -z ... 3232`: on ESP32 core 2.x ArduinoOTA's discovery
+  # port is **UDP**, so a TCP connect probe reports "closed" even when the
+  # machine is perfectly reachable and flashable. That false negative is why
+  # earlier sweeps of this LAN found nothing.
+  echo "resolving discreet.local via mDNS..."
+  RESOLVED=$(ping -c1 -W2 discreet.local 2>/dev/null \
+             | sed -n '1s/.*(\([0-9.]*\)).*/\1/p')
+  if [ -n "$RESOLVED" ]; then
+    echo "  discreet.local -> $RESOLVED"
+    if verify_is_discreet "$RESOLVED"; then
+      IP="$RESOLVED"
     fi
-  done
+  fi
 
-  case "${#CANDIDATES[@]}" in
-    0) die "no verified Discreet controller found.
-The machine may be off, on another subnet, or not running the MQTT firmware.
-Get its IP from your router or the USB serial log and pass it explicitly:
-  $0 <ip>" ;;
-    1) IP="${CANDIDATES[0]}"
-       echo "  verified candidate: $IP" ;;
-    *) echo
-       echo "MULTIPLE candidates found: ${CANDIDATES[*]}"
-       die "refusing to guess. Re-run with the correct IP:
-  $0 <ip>" ;;
-  esac
+  # FALLBACK: browse _arduino._tcp for any advertised OTA device.
+  if [ -z "$IP" ] && command -v dns-sd >/dev/null 2>&1; then
+    echo "  browsing _arduino._tcp..."
+    NAMES=$(timeout 6 dns-sd -B _arduino._tcp local 2>/dev/null \
+            | awk '/_arduino/ {print $NF}' | sort -u)
+    for n in $NAMES; do
+      cand=$(ping -c1 -W2 "$n.local" 2>/dev/null | sed -n '1s/.*(\([0-9.]*\)).*/\1/p')
+      [ -n "$cand" ] || continue
+      echo "  $n.local -> $cand"
+      if verify_is_discreet "$cand"; then
+        IP="$cand"
+        break
+      fi
+    done
+  fi
+
+  [ -n "$IP" ] || die "could not find the Discreet controller via mDNS.
+The machine may be off, on another subnet, or its sketch may have crashed
+(ArduinoOTA stops advertising if loop() died).
+Get its IP from your router and pass it explicitly:
+  $0 <ip>"
 else
   # An explicitly supplied IP still gets the safety check.
   verify_is_discreet "$IP" || die "$IP does not look like the Discreet controller.

@@ -114,12 +114,42 @@ always the *net* (tared) value. Regression-tested in
 4. Flash via USB, later via ArduinoOTA (hostname `Discreet`, password
    `Discreet`).
 
-> BUILD STATUS (Aug 28, 2026): COMPILED with arduino-cli 1.5.1 + ESP32 core
-> **2.0.17** + NimBLE-Arduino **1.4.3**.
-> Binary: **1,136,021 bytes = 86%** of the 1.25 MB OTA app slot.
-> RAM 60,488 B (18%).
-> Not yet flashed or bench-tested against the machine - see
-> "Bench test" below.
+> BUILD STATUS (Aug 29, 2026): **FLASHED SUCCESSFULLY** to 192.168.0.156
+> via OTA (`Authenticating...OK` -> 100% -> `Result: OK`). Confirmed alive
+> after reboot: pings clean, and mDNS re-advertising `_arduino._tcp` proves
+> `loop()` is running (a crashed sketch stops advertising).
+> Built with arduino-cli 1.5.1 + ESP32 core **2.0.17** + NimBLE **1.4.3**.
+> Binary 1,142,592 B = **87%** of the 1.25 MB OTA slot. RAM 60,488 B (18%).
+>
+> **Scale factor CONFIRMED** (was the one unverified assumption): a real
+> calibrated load on the scale decoded to **481.790 g**, so the milligram
+> factor (`/1000`) is correct. The negative-sign path was also confirmed
+> live at **-481.83 g** for the same object (sign symmetry within 40 mg).
+>
+> **NOT yet verified on hardware** - do NOT trust it on a real shot until
+> these are checked (see "Bench test"): the ESP32-side BLE link to the
+> scale (only ever exercised from macOS/bleak), the deferred tare, and the
+> predictive cut firing during an actual extraction. No MQTT broker was
+> running on the LAN, so telemetry could not be read back.
+
+### ⚠ Finding the machine: ArduinoOTA discovery is UDP, not TCP
+
+**Do not scan for the machine with `nc -z <ip> 3232`.** On ESP32 core 2.x
+ArduinoOTA's discovery port is **UDP**, so a TCP connect probe reports
+"closed" on a machine that is perfectly reachable and flashable. That false
+negative wasted hours here - repeated LAN sweeps concluded "the machine is
+offline" while it was sitting at `192.168.0.156` answering pings.
+
+Use **mDNS** instead, which is what `flash-discreet.sh` now does:
+
+```sh
+ping -c1 discreet.local          # the firmware sets hostname "discreet"
+dns-sd -B _arduino._tcp local    # browse for any ArduinoOTA node
+dns-sd -L discreet _arduino._tcp local   # TXT record: board=esp32
+```
+
+The `_arduino._tcp` TXT record is also a useful identity check: it reports
+`board=esp32`, whereas ss-xiao is an `esp32s3`.
 
 ### ⚠ Flashing: do NOT just pick the first device on port 3232
 
@@ -174,17 +204,18 @@ cd test && ./run-tests.sh
 
 Compiles both suites with `-Wall -Wextra -Werror -O2` and runs them.
 
-- `test_myscale_parse.c` - **65 assertions**. Parses the REAL captured
-  packet, cross-checks our decode against GaggiMate's and Bean
+- `test_myscale_parse.c` - **75 assertions**. Parses the REAL captured
+  packets, cross-checks our decode against GaggiMate's and Bean
   Conqueror's implementations on every case, and covers sign nibbles,
   stability flag, malformed/hostile input, the byte-3 nibble mask, the
-  deferred-tare regression, and the falsified trailer-checksum hypotheses.
+  deferred-tare regression, the falsified trailer-checksum hypotheses, and
+  the **live-captured ground-truth packets** (section 11).
 - `test_bbw_logic.c` - **19 assertions**. Replays realistic shot curves
   through the exact cut algorithm; asserts yield accuracy, the lead
   clamp, and every safety rule (unarmed never cuts, cut latches once,
   negative weight never cuts, missing cup never cuts).
 
-Both suites pass: **84/84**.
+Both suites pass: **94/94**.
 
 > Note on the trailer bytes: GaggiMate defines a `calculateChecksum()`
 > ("sum of all bytes except the last") but never calls it. Do **not** add

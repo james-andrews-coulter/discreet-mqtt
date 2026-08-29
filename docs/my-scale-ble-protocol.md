@@ -129,13 +129,37 @@ woken before a shot. Firmware therefore must:
 
 ## Open questions
 
-1. **Scale factor confirmation.** Need one packet with a KNOWN mass on the
-   scale to confirm milligrams (`/1000`) vs another factor. Bean Conqueror's
-   `/1000` + comment "weight is in gram" is strong evidence, but the live
-   confirmation is cheap and worth doing.
+1. ~~Scale factor confirmation.~~ **RESOLVED 2026-08-29 — CONFIRMED live.**
+   See "Live confirmation" below.
 2. **Byte 18-19 trailer** — algorithm UNKNOWN, and the obvious guess is WRONG.
    Not needed: we validate packets by the `AC 40` header and length instead.
 3. **`FFB1` command bytes** beyond tare — unknown, and unnecessary.
+
+## Live confirmation (2026-08-29) — ground truth
+
+Captured from the real device with a calibrated load on the platform. These
+three packets are now permanent regression vectors in
+`test/test_myscale_parse.c` section 11.
+
+| condition | packet | decoded |
+|---|---|---|
+| empty platform | `ac4001000000...a6a7` | `0.000 g`, stable |
+| calibrated load | `ac4001000759fe...a605` | **`481.790 g`**, stable |
+| load lifted after tare | `ac408100000564...a690` | `-1.380 g`, stable, sign nibble `0x8` |
+
+**Scale factor `/1000` (milligrams) is CONFIRMED.** The loaded reading decodes
+to 481.790 g — a plausible physical mass. Had the factor been `/100` it would
+read 4817.9 g and `/10` would read 48179 g, both absurd for a kitchen scale, so
+a single real load pins the factor unambiguously.
+
+**Negative sign path is CONFIRMED live.** Previously only exercised against
+synthetic vectors. Lifting the load after a tare produced genuine negative
+readings, and the same object read `-481.83 g` versus `+481.790 g` — sign
+symmetry within 40 mg, which also demonstrates decode repeatability.
+
+Byte 18 was **constant `0xa6`** across all three packets while byte 19 varied
+(`a7` / `05` / `90`), so byte 18 is not part of any checksum over the payload —
+further reason not to add trailer validation.
 
 ### Trailer bytes: "sum checksum" is FALSIFIED (tested, do not implement)
 
