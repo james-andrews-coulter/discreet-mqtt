@@ -367,6 +367,7 @@ void publishTelemetry() {
   doc["Kd"] = Kd;
   doc["PIDonly"] = PIDonly;
   doc["steamsetpoint"] = round((steamSetpoint - offset) * 10) / 10.0;
+  doc["offset"] = offset;
   doc["weight"] = round(scaleNetWeight() * 10) / 10.0;
   doc["targetweight"] = targetWeight;
   doc["shotweight"] = round(shotWeight * 10) / 10.0;
@@ -454,6 +455,12 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
   else if (t.endsWith("/pidonly")) {
     PIDonly = msg.equalsIgnoreCase("ON");
+  }
+  else if (t.endsWith("/offset")) {
+    // Probe offset (°C). User-facing temps show setpoint-offset, so raising
+    // this lowers the actual boiler temp. Mirrors the Discreet web UI 'Offset'.
+    offset = constrain((int)msg.toFloat(), 0, 30);
+    setpoint = setpointBoot; // re-apply so displayed temp stays consistent
   }
   else if (t.endsWith("/steamsetpoint")) {
     steamSetpoint = constrain(msg.toFloat() + offset, 110.0f + offset, 160.0f + offset);
