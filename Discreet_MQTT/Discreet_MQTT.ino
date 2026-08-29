@@ -96,6 +96,13 @@ volatile float scaleRawWeight = 0.0f; // latest ABSOLUTE grams from the scale
 volatile bool scaleStable = false;    // scale reports the reading as settled
 volatile bool scaleConnected = false; // BLE link up
 volatile uint32_t scaleLastPacketMs = 0; // millis() of last good packet
+bool scaleWasEverConnected = false;   // beep only on the FIRST connect
+
+// How long the scale may go silent before we drop the link. This scale idles
+// and deep-sleeps routinely, so a short timeout causes an endless
+// scan->connect->sleep->drop cycle. A frozen reading cannot cause a premature
+// cut (the cut requires weight to RISE to target), so a generous value is safe.
+#define SCALE_SILENCE_MS 15000
 
 float scaleTareOffset = 0.0f;         // software tare captured at shot start
 uint32_t scaleTareSettleAt = 0;       // 0 = no pending tare; else deadline (ms)
@@ -756,7 +763,15 @@ void scaleTask(void* param) {
               scaleLastPacketMs = millis();
               scaleConnected = true;
               Serial.println("Scale connected (MY_SCALE FFB0)");
-              beepBuzzer(1, 150, 100);
+              // Beep ONLY on a genuine new connection, not on every
+              // reconnect. This scale deep-sleeps after ~2-3 min of
+              // inactivity, which drops the link; without this guard the
+              // scan/connect/sleep cycle beeps forever every ~10-15 s.
+              // (Reported 2026-08-29: "beeping every 10 seconds".)
+              if (!scaleWasEverConnected) {
+                scaleWasEverConnected = true;
+                beepBuzzer(1, 150, 100);
+              }
             } else {
               scaleClient->disconnect();
             }
@@ -773,8 +788,15 @@ void scaleTask(void* param) {
       // Stale-data watchdog: the link can stay nominally "up" while the scale
       // deep-sleeps and stops notifying. Treat silence as a disconnect so BBW
       // never cuts on a frozen weight.
-      if (millis() - scaleLastPacketMs > 3000) {
-        Serial.println("Scale silent >3s - dropping link");
+      //
+      // 3 s was too aggressive: this scale idles/sleeps routinely, so a short
+      // timeout caused a permanent scan->connect->sleep->drop cycle (and, with
+      // the old unconditional beep, noise every ~10-15 s). 15 s still protects
+      // a shot (a 36 g pour takes ~25-30 s, and a frozen reading cannot cause a
+      // premature cut because the cut needs weight to RISE to target), while
+      // letting an idle scale keep its link.
+      if (millis() - scaleLastPacketMs > SCALE_SILENCE_MS) {
+        Serial.println("Scale silent - dropping link");
         scaleConnected = false;
         if (scaleClient) scaleClient->disconnect();
       }
@@ -967,6 +989,8 @@ void loop() {
     }
     // Scale lost mid-shot: beep and continue manually (the shot keeps
     // running under normal pressure profiling). Optional hard-cut toggle.
+    // scaleArmed is only true during a shot, and is cleared here, so this
+    // beeps at most once per shot - it cannot join the idle reconnect cycle.
     if (scaleArmed && !scaleConnected) {
       scaleArmed = false;
       Serial.println("Scale lost mid-shot - manual mode");

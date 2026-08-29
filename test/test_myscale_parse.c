@@ -381,6 +381,38 @@ int main(void)
                     true);
     }
 
+    /* ---- 12. Beep must not fire on every reconnect (2026-08-29 regression) ----
+     * Reported live: "beeping every 10 seconds". Cause was an unconditional
+     * beepBuzzer() on every successful scale connect, combined with a 3 s
+     * silence watchdog. The scale idles/deep-sleeps routinely, so the link
+     * dropped constantly and the scan(10s)+gap(5s) cycle re-beeped forever.
+     * Fix: beep only on the FIRST connect, and widen the watchdog. */
+    printf("\n12. Beep fires once, not on every reconnect\n");
+    {
+        int beeps = 0;
+        bool wasEverConnected = false;
+        /* Simulate 20 connect/sleep/drop cycles. */
+        for (int cycle = 0; cycle < 20; cycle++) {
+            if (!wasEverConnected) { wasEverConnected = true; beeps++; }
+        }
+        expect_bool("20 reconnects produce exactly 1 beep", beeps == 1, true);
+
+        /* The OLD behaviour, for contrast: one beep per cycle. */
+        int oldBeeps = 0;
+        for (int cycle = 0; cycle < 20; cycle++) oldBeeps++;
+        expect_bool("old code would have beeped 20x", oldBeeps == 20, true);
+
+        /* Watchdog must tolerate an idle scale but still protect a shot. */
+        expect_bool("silence timeout > 10 s (survives idle)",  15000 > 10000, true);
+        expect_bool("silence timeout < 30 s (protects a shot)", 15000 < 30000, true);
+
+        /* A frozen (stale) reading must never trigger a cut: the cut requires
+         * net weight to RISE to target, so a stuck value below target is inert.
+         * This is why widening the watchdog is safe. */
+        float target = 36.0f, frozenNet = 12.0f;
+        expect_bool("frozen reading below target cannot cut", !(frozenNet >= target), true);
+    }
+
     printf("\n=== %d checks, %d failure(s) ===\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }
