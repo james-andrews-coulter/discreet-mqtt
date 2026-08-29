@@ -123,11 +123,12 @@ float shotWeight = 0.0f;              // NET weight at the moment of the cut
 
 // --- Predictive cut tuning ---
 // The pump keeps delivering, and the puck keeps dripping, for a short time
-// after we cut. BBW_LEAD_TIME_S is how far ahead we predict: at 2 g/s a
+// after we cut. bbwLeadTimeS is how far ahead we predict: at 2 g/s a
 // 0.35 s lead stops ~0.7 g early so the final settled weight lands on target.
-// Raise it if shots consistently overshoot, lower it if they come up short.
-#define BBW_LEAD_TIME_S   0.35f
+// CONFIGURABLE (see bbw_lead_s below) - raise if shots consistently overshoot,
+// lower if they come up short. Exposed in HA as "BBW Lead Time".
 #define BBW_MAX_LEAD_G    3.0f        // safety clamp on the predicted lead
+float bbwLeadTimeS = 0.35f;           // predictive-cut lead, seconds (config.json + MQTT)
 float bbwFlowRate = 0.0f;             // measured extraction flow, g/s
 uint32_t bbwLastFlowMs = 0;           // last flow-estimate timestamp
 float bbwLastFlowWeight = 0.0f;       // net weight at last flow estimate
@@ -371,6 +372,7 @@ void publishTelemetry() {
   doc["shotweight"] = round(shotWeight * 10) / 10.0;
   doc["bbw"] = bbwEnabled;
   doc["bbwarmed"] = scaleArmed;
+  doc["bbwlead"] = round(bbwLeadTimeS * 100) / 100.0;   // current predictive-cut lead
   doc["scale"] = scaleConnected ? "connected" : "offline";
   doc["scalestable"] = scaleStable;
   doc["flowrate"] = round(bbwFlowRate * 100) / 100.0;
@@ -420,6 +422,10 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
   else if (t.endsWith("/targetweight")) {
     targetWeight = constrain(msg.toFloat(), 0.0f, 100.0f);
+  }
+  else if (t.endsWith("/bbwlead")) {
+    // Predictive-cut lead in seconds. Raise if shots overshoot, lower if short.
+    bbwLeadTimeS = constrain(msg.toFloat(), 0.0f, 3.0f);
   }
   else if (t.endsWith("/bbw")) {
     bbwEnabled = msg.equalsIgnoreCase("ON");
@@ -524,6 +530,7 @@ void loadSDConfig() {
     targetWeight = doc["target_weight"] | targetWeight;
     bbwEnabled = doc["bbw_enabled"] | bbwEnabled;
     cutOnScaleLoss = doc["cut_on_scale_loss"] | cutOnScaleLoss;
+    bbwLeadTimeS = doc["bbw_lead_s"] | bbwLeadTimeS;
 
     setpoint = setpoint + offset;
     setpointBoot = setpoint;
@@ -538,6 +545,7 @@ void loadSDConfig() {
     targetWeight = 36.0f;
     bbwEnabled = true;
     cutOnScaleLoss = false;
+    bbwLeadTimeS = 0.35f;
   }
 
   // SD + SPI done for the whole boot. Kill both so they never fight WiFi.
@@ -588,6 +596,7 @@ void saveConfigToSD() {
   doc["target_weight"] = targetWeight;
   doc["bbw_enabled"] = bbwEnabled;
   doc["cut_on_scale_loss"] = cutOnScaleLoss;
+  doc["bbw_lead_s"] = bbwLeadTimeS;
 
   serializeJson(doc, configFile);
   configFile.close();
@@ -980,7 +989,7 @@ void loop() {
     // Predictive cut: this scale notifies at ~6.7 Hz (150 ms), and there is
     // additional drip/lag after the pump stops. Waiting for net >= target
     // therefore always overshoots. We stop early by the amount we predict
-    // will still arrive:  lead = flowRate * BBW_LEAD_TIME_S.
+    // will still arrive:  lead = flowRate * bbwLeadTimeS.
     // Flow rate is measured from the weight curve itself, so it adapts to the
     // actual shot instead of assuming a fixed 2 g/s.
     // Do not evaluate a cut while a tare is still settling: the offset is
@@ -1008,7 +1017,7 @@ void loop() {
       }
 
       // Predicted extra grams that will land after we cut.
-      float lead = bbwFlowRate * BBW_LEAD_TIME_S;
+      float lead = bbwFlowRate * bbwLeadTimeS;
       if (lead > BBW_MAX_LEAD_G) lead = BBW_MAX_LEAD_G;  // never cut absurdly early
       if (lead < 0.0f) lead = 0.0f;
 

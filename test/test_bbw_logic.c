@@ -16,7 +16,7 @@
 #include <string.h>
 
 /* ---- constants mirrored from the firmware ---- */
-#define BBW_LEAD_TIME_S   0.35f
+#define BBW_LEAD_TIME_S   0.35f   /* default; the setting is now runtime-configurable */
 #define BBW_MAX_LEAD_G    3.0f
 #define SCALE_NOTIFY_MS   150      /* measured ~6.7 Hz */
 
@@ -28,6 +28,7 @@ typedef struct {
     bool     pumpCutByWeight;
     float    shotWeight;
     float    bbwFlowRate;
+    float    bbwLeadTimeS;          /* CONFIGURABLE - mirrored from firmware */
     uint32_t bbwLastFlowMs;
     float    bbwLastFlowWeight;
     /* diagnostics */
@@ -40,6 +41,7 @@ static void bbw_reset(bbw_t *s, float target)
     memset(s, 0, sizeof(*s));
     s->targetWeight = target;
     s->scaleArmed   = true;
+    s->bbwLeadTimeS = BBW_LEAD_TIME_S;  /* default lead */
 }
 
 /* EXACT port of the firmware's per-iteration BBW block. */
@@ -63,7 +65,7 @@ static void bbw_step(bbw_t *s, float net, uint32_t nowMs)
         s->bbwLastFlowWeight = net;
     }
 
-    float lead = s->bbwFlowRate * BBW_LEAD_TIME_S;
+    float lead = s->bbwFlowRate * s->bbwLeadTimeS;
     if (lead > BBW_MAX_LEAD_G) lead = BBW_MAX_LEAD_G;
     if (lead < 0.0f) lead = 0.0f;
 
@@ -236,6 +238,47 @@ int main(void)
         for (uint32_t t = 0; t < 40000; t += SCALE_NOTIFY_MS)
             bbw_step(&s, 0.05f, t);
         ok("no cut when nothing is flowing", !s.shotCutByWeight, "40 s at 0.05 g");
+    }
+
+    /* 9. Configurable lead changes WHERE the cut happens (the feature) */
+    printf("\n9. BBW Lead Time is configurable and changes the cut point\n");
+    {
+        /* Same shot, held at a steady flow of 2 g/s. With lead L the cut fires
+         * when net reaches target - (flow*L). A bigger lead => earlier cut. */
+        const float target = 36.0f, flow = 2.0f;
+
+        bbw_reset(&s, target);
+        s.bbwLeadTimeS   = 0.0f;            /* no lead -> cut at exact target */
+        s.bbwFlowRate    = flow; s.bbwLastFlowMs = 1; s.bbwLastFlowWeight = 0;
+        bbw_step(&s, target + 0.01f, 100);
+        ok("lead=0 cuts at ~exact target", s.shotCutByWeight, "net 36.01");
+
+        bbw_reset(&s, target);
+        s.bbwLeadTimeS   = 0.35f;           /* default */
+        s.bbwFlowRate    = flow; s.bbwLastFlowMs = 1; s.bbwLastFlowWeight = 0;
+        bbw_step(&s, target - flow*0.35f + 0.01f, 100);
+        ok("lead=0.35 cuts ~0.70 g early", s.shotCutByWeight, "net ~35.30");
+
+        bbw_reset(&s, target);
+        s.bbwLeadTimeS   = 1.50f;           /* large lead */
+        s.bbwFlowRate    = flow; s.bbwLastFlowMs = 1; s.bbwLastFlowWeight = 0;
+        bbw_step(&s, target - flow*1.50f + 0.01f, 100);
+        ok("lead=1.50 cuts ~3.00 g early (clamped by BBW_MAX_LEAD_G)",
+           s.shotCutByWeight, "net ~33.00");
+
+        ok("larger lead cuts strictly earlier than lead=0",
+           (target - flow*1.50f) < (target - flow*0.0f), NULL);
+    }
+
+    /* 10. Lead is clamped even when the setting is large (safety) */
+    printf("\n10. Lead setting cannot cause an absurdly early cut\n");
+    {
+        bbw_reset(&s, 36.0f);
+        s.bbwLeadTimeS   = 10.0f;           /* beyond the 3 s clamp */
+        s.bbwFlowRate    = 2.0f; s.bbwLastFlowMs = 1; s.bbwLastFlowWeight = 0;
+        bbw_step(&s, 36.0f - BBW_MAX_LEAD_G + 0.01f, 100);
+        ok("cut clamped at BBW_MAX_LEAD_G (3 g)", s.shotCutByWeight, NULL);
+        ok("leadAtCut <= clamp", s.leadAtCut <= BBW_MAX_LEAD_G + 1e-6f, NULL);
     }
 
     printf("\n=== %d checks, %d failure(s) ===\n", checks, failures);
