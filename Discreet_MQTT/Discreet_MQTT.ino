@@ -96,6 +96,11 @@ volatile float scaleRawWeight = 0.0f; // latest ABSOLUTE grams from the scale
 volatile bool scaleStable = false;    // scale reports the reading as settled
 volatile bool scaleConnected = false; // BLE link up
 volatile uint32_t scaleLastPacketMs = 0; // millis() of last good packet
+bool scaleCanNotify = false;     // diagnostics: result of canNotify() at connect
+uint32_t scalePkts = 0;         // diagnostics: weight packets parsed (passed header)
+uint32_t scaleCbRaw = 0;        // diagnostics: notify callback invocations (any)
+bool scaleChrFound = false;     // diagnostics: FFB2 discovered
+bool scaleNotifyEnabled = false;// diagnostics: CCCD write / subscribe succeeded
 bool scaleWasEverConnected = false;   // beep only on the FIRST connect
 
 // How long the scale may go silent before we drop the link. This scale idles
@@ -369,6 +374,10 @@ void publishTelemetry() {
   doc["scale"] = scaleConnected ? "connected" : "offline";
   doc["scalestable"] = scaleStable;
   doc["flowrate"] = round(bbwFlowRate * 100) / 100.0;
+  doc["scalepkts"] = scalePkts;        // diagnostics: packets received since boot
+  doc["scalecbraw"] = scaleCbRaw;    // diagnostics: notify callback invocations
+  doc["scalechr"] = scaleChrFound;   // diagnostics: FFB2 discovered
+  doc["scalenotify"] = scaleNotifyEnabled; // diagnostics: CCCD write / subscribe ok
 
   String out;
   serializeJson(doc, out);
@@ -660,6 +669,7 @@ static ScaleClientCallbacks scaleClientCB;
 // ------------------------------------------------------------------
 void scaleNotifyCallback(NimBLERemoteCharacteristic* chr, uint8_t* data,
                          size_t len, bool isNotify) {
+  scaleCbRaw++;                      // diagnostics: callback fired at all
   if (chr != scaleWeightChr) return;
   if (data == nullptr || len < SCALE_PKT_MINLEN) return;
   if (data[0] != SCALE_HDR0 || data[1] != SCALE_HDR1) return; // not a weight frame
@@ -675,6 +685,7 @@ void scaleNotifyCallback(NimBLERemoteCharacteristic* chr, uint8_t* data,
   scaleRawWeight     = (isNegative ? -1.0f : 1.0f) * ((float)mg / 1000.0f);
   scaleStable        = ((data[2] & 0x0F) == 0x1);
   scaleLastPacketMs  = millis();
+  scalePkts++;                       // diagnostics: a packet made it through
 }
 
 // ------------------------------------------------------------------
@@ -743,8 +754,32 @@ void scaleTask(void* param) {
           if (svc) {
             scaleWeightChr = svc->getCharacteristic(NimBLEUUID(SCALE_WEIGHT_UUID));
             scaleCmdChr = svc->getCharacteristic(NimBLEUUID(SCALE_COMMAND_UUID));
-            if (scaleWeightChr && scaleWeightChr->canNotify()) {
+            scaleChrFound = (scaleWeightChr != nullptr);  // diagnostics
+
+            // Enable notifications. NimBLE-Arduino 1.4.3's subscribe() silently
+            // no-ops when the CCCD (0x2902) descriptor has not been discovered:
+            // setNotify() returns true even if getDescriptor(0x2902) is nullptr
+            // and writes NOTHING, so the callback never fires. getCharacteristic()
+            // does NOT auto-discover descriptors, so we must force descriptor
+            // discovery first. Observed live 2026-08-29: scale connected but
+            // scalecbraw=0 (notify callback never fired) until this was fixed.
+            if (scaleWeightChr) {
+              // Force discovery of the characteristic's descriptors (incl. CCCD).
+              scaleWeightChr->getDescriptors(true);
+              NimBLERemoteDescriptor* cccd =
+                  scaleWeightChr->getDescriptor(NimBLEUUID((uint16_t)0x2902));
+              if (cccd) {
+                uint8_t en = 0x01; // notifications on
+                cccd->writeValue(&en, 1, true);
+                scaleNotifyEnabled = true;
+              } else {
+                // Fallback: try subscribe() (works if descriptors were cached)
+                scaleNotifyEnabled = scaleWeightChr->subscribe(true, scaleNotifyCallback);
+              }
               scaleWeightChr->subscribe(true, scaleNotifyCallback);
+              scaleCanNotify = scaleWeightChr->canNotify();
+              Serial.printf("Weight notifications: cccd=%s canNotify=%d\n",
+                            cccd ? "written" : "missing", scaleCanNotify ? 1 : 0);
             }
             // FFB1 (command/tare) is optional: software tare covers us if the
             // characteristic is missing, so do not fail the connection on it.
