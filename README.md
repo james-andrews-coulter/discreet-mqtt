@@ -6,6 +6,49 @@ Bluetooth kitchen scale. The ESP32 talks to HA over MQTT and to the scale
 over BLE. No custom HA components, no 30-second polling, live 1 Hz
 telemetry.
 
+---
+
+## 🚀 Quick Start (5 minutes reading, then ~2 hours hands-on)
+
+**New to this? Start here.** This project lets you control a Discreet espresso machine from Home Assistant with a Bluetooth scale that auto-stops the shot at your target weight.
+
+### What you need to buy
+
+| Item | Qty | Notes |
+|------|-----|-------|
+| Discreet espresso machine | 1 | The hardware this runs on |
+| ESP32 DevKit v1 (classic ESP32, **not** S2/S3/C3) | 1 | Must fit inside the machine |
+| MAX6675 thermocouple module | 1 | Reads boiler temperature |
+| Fotek SSR-25 DA (or equivalent) | 1 | Switches the heating element |
+| `MY_SCALE` Bluetooth kitchen scale | 1 | **Exact model only** — WeighMyBru, Bean Conqueror, etc. will NOT work |
+| MicroSD card (FAT32) | 1 | For config.json |
+| USB-C power supply (5 V / 2 A) | 1 | Powers the ESP32 |
+| Jumper wires / soldering gear | - | See wiring in `docs/upstream/` |
+
+### What you need already running
+
+- **Home Assistant** (any install: HAOS, Docker, supervised)
+- **Mosquitto MQTT broker** add-on (in HA: Settings → Add-ons → Mosquitto broker)
+- **MQTT integration** enabled in HA (Settings → Devices & Services → MQTT)
+
+### The 4 steps (do in order)
+
+1. **Wire the hardware** — see `docs/upstream/` for the GaggiMate schematic. ESP32 GPIOs: thermocouple (19/23/18), SSR (25).
+2. **Flash the firmware** — see [§1 Firmware](#1-firmware) below. Use `./flash-discreet.sh` after first USB flash.
+3. **Install the HA package** — drop `packages/discreet.yaml` into `<ha-config>/packages/`, add `packages: !include_dir_named packages` to `configuration.yaml`, restart HA.
+4. **Import the dashboard** — Settings → Dashboards → Add Dashboard → Raw configuration editor → paste `dashboard.yaml`.
+
+### First shot checklist
+
+- [ ] Scale shows `Scale connected (MY_SCALE FFB0)` in serial monitor (115200 baud)
+- [ ] Press **Tare Scale** in HA → weight reads ~0 g
+- [ ] Put known mass (500 g) on scale → HA reads 500.0 g (confirms scale factor)
+- [ ] Wake scale, put cup on, pull shot → auto-cuts at target weight
+
+> ⚠️ **The scale deep-sleeps after ~2 minutes.** Wake it (press button) before every shot or brew-by-weight won't arm.
+
+---
+
 ## Architecture (two brains, one control surface)
 
 - **ESP32 inside the machine** (this firmware): PID, pressure profiling,
@@ -17,14 +60,19 @@ telemetry.
 - **Home Assistant**: the dashboard. Sets targets, shows state, records
   history. The shot loop itself always runs on the ESP32.
 
-## Files
+## Files (what each one does)
 
-- `Discreet_MQTT.ino`  - firmware (MQTT + BLE scale client). `Discreet_MQTT.ino` (root) is a symlink to `Discreet_MQTT/Discreet_MQTT.ino` for CLI convenience; edit the real file.
-- `packages/discreet.yaml` - MQTT entity definitions (drop into HA `packages/` directory)
-- `dashboard.yaml`     - Lovelace dashboard (import from YAML)
-- `docs/my-scale-ble-protocol.md` - **verified** BLE protocol for the scale
-- `docs/upstream/` - reference implementations (GaggiMate, MIT-licensed)
-- `test/` - host-side unit tests (no hardware needed)
+| File | Purpose | You touch it? |
+|------|---------|---------------|
+| `Discreet_MQTT.ino` | Firmware (runs on ESP32). Root file is a symlink — edit `Discreet_MQTT/Discreet_MQTT.ino`. | Yes (WiFi/MQTT config) |
+| `packages/discreet.yaml` | MQTT entity definitions for HA. Drop into `<ha-config>/packages/`. | No (drop in) |
+| `dashboard.yaml` | Lovelace dashboard. Import via Raw Configuration Editor. | No (import) |
+| `config.json.example` | Template for SD card config. Copy to `config.json` on SD card. | Yes (fill in) |
+| `.mqtt_creds.example` | Template for flash script MQTT creds. Copy to `.mqtt_creds`. | Yes (fill in) |
+| `flash-discreet.sh` | Safe OTA flasher with identity checks. Run when machine is idle. | Run it |
+| `docs/my-scale-ble-protocol.md` | Verified BLE protocol docs (for debugging). | Reference only |
+| `docs/upstream/` | Reference schematics & code (GaggiMate). | Wiring reference |
+| `test/` | Host-side unit tests (run `cd test && ./run-tests.sh`). | Run once to verify |
 
 ## THE SCALE (read this first)
 
@@ -380,6 +428,41 @@ The firmware will create/overwrite this file when you press **Save Config** in H
 - **Bench-untested:** ESP32-side BLE link + deferred tare + predictive cut during a live extraction (only exercised from macOS/bleak so far).
 - `FFB1` command bytes beyond tare, and the byte 18-19 checksum, remain
   undocumented. Neither is needed.
+
+## System diagram
+
+```
+┌─────────────────┐     BLE (6.7 Hz)      ┌──────────────┐
+│  ESP32 inside   │ ◄───────────────────── │  MY_SCALE    │
+│  the machine    │   weight notifications │  (on drip    │
+│                 │   tare command         │   tray)      │
+│  • PID loop     │                        └──────────────┘
+│  • Pressure     │
+│  • Shot logic   │
+│  • BLE central  │
+└────────┬────────┘
+         │ MQTT (1 Hz telemetry, commands)
+         ▼
+┌─────────────────┐
+│  Mosquitto MQTT │
+│  broker (HA)    │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  Home Assistant │
+│  • Entities     │
+│  • Dashboard    │
+│  • Automations  │
+└─────────────────┘
+```
+
+## Where to get help
+
+- **Issues:** [GitHub Issues](https://github.com/james-andrews-coulter/discreet-mqtt/issues) — bugs, questions, feature requests
+- **Scale protocol:** `docs/my-scale-ble-protocol.md` — full byte tables + live capture
+- **Wiring reference:** `docs/upstream/` — GaggiMate schematic (MIT licensed)
+- **Original Discreet:** https://github.com/Discreet-Coffee/Discreet
 
 ## License
 
