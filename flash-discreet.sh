@@ -19,14 +19,13 @@ SKETCH_DIR="$HOME/discreet-mqtt"
 FW="$SKETCH_DIR/build/Discreet_MQTT.ino.bin"
 OTA_PORT=3232
 OTA_PASS="Discreet"
-ESPOTA="$HOME/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/espota.py"
+ESPOTA="${ESPOTA:-$HOME/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/espota.py}"
 
 # Known-other ESP32s on this LAN that ALSO listen on OTA port 3232 and must
-# never be flashed with espresso firmware. ss-xiao is the XIAO ESP32S3 garden
-# waterer (ESPHome). Add any future ESP32 here.
-DENY_IPS=(
-  "192.168.0.166"   # ss-xiao garden waterer (ESPHome)
-)
+# never be flashed with espresso firmware (e.g. ESPHome devices). Add any future ESP32 here.
+# example LAN IP — override via $DISCREET_DENY_IPS; add your other ESP32s here
+DENY_IPS=(${DISCREET_DENY_IPS:-"192.168.0.166"})
+
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
@@ -43,8 +42,7 @@ echo "size:     $SIZE bytes ($((SIZE * 100 / MAXSZ))% of the $MAXSZ B OTA slot)"
 # ---- locate the machine ----
 #
 # CRITICAL: an open port 3232 does NOT mean "this is the espresso machine".
-# ESPHome devices also listen on 3232 (e.g. the ss-xiao garden waterer at
-# 192.168.0.166). Flashing espresso firmware onto the wrong ESP32 would brick
+# ESPHome devices also listen on 3232. Flashing espresso firmware onto the wrong ESP32 would brick
 # that device's function. So we verify IDENTITY before offering a target:
 # the machine must be publishing MQTT telemetry on discreet/telemetry.
 IP="${1:-}"
@@ -54,8 +52,7 @@ verify_is_discreet() {
   local ip="$1"
 
   # 1. Hardcoded denylist of KNOWN-other ESP32s on this LAN. This is the only
-  #    check that works when the other device is OFFLINE (ss-xiao has an
-  #    intermittent 5V press-fit-header fault and drops off the network), so
+  #    check that works when the other device is OFFLINE, so
   #    its IP could be reassigned or it could reappear mid-scan.
   for deny in "${DENY_IPS[@]}"; do
     if [ "$ip" = "$deny" ]; then
@@ -64,9 +61,10 @@ verify_is_discreet() {
     fi
   done
 
-  # 2. ESPHome exposes its NATIVE API on TCP 6053 (ss-xiao has `api:` enabled).
+  # 2. ESPHome exposes its NATIVE API on TCP 6053 (ESPHome devices often have `api:` enabled).
   #    The Discreet Arduino firmware never does. Reliable even with no
   #    web_server - so do NOT rely on port 80 alone.
+
   if nc -z -G 1 "$ip" 6053 2>/dev/null; then
     echo "  $ip: port 6053 open = ESPHome native API -> NOT the espresso machine. Skipping."
     return 1
@@ -153,7 +151,7 @@ fi
 # Reuses the telemetry packet already fetched above.
 if [ -n "$TELEMETRY" ]; then
   STATE=$(printf '%s' "$TELEMETRY" \
-          | /usr/local/bin/python3 -c 'import sys,json; print(json.load(sys.stdin).get("shotstate","?"))' 2>/dev/null || echo "?")
+          | python3 -c 'import sys,json; print(json.load(sys.stdin).get("shotstate","?"))' 2>/dev/null || echo "?")
   echo "shot state: $STATE"
   case "$STATE" in
     preinfusion|bloom|extraction)
@@ -165,16 +163,18 @@ fi
 echo
 echo "About to flash the ESPRESSO controller at $IP."
 if [ -z "$TELEMETRY" ]; then
-  echo "!! Identity NOT positively confirmed. Other ESP32s on your LAN also"
-  echo "!! listen on 3232 (e.g. the ss-xiao garden waterer). Flashing the wrong"
-  echo "!! device would overwrite its firmware. Double-check the IP first."
+  echo "!! Identity NOT positively confirmed. Other ESP32s on your LAN may also"
+  echo "!! listen on 3232. Flashing the wrong device would overwrite its firmware."
+  echo "!! Double-check the IP first."
 fi
 read -r -p "Flash now? The heater holds its last state for ~30 s. [y/N] " ans
+
 case "$ans" in [yY]*) ;; *) echo "aborted"; exit 0 ;; esac
 
 echo "uploading (espota is UDP; 'Authenticating...OK' means the handshake worked)"
-/usr/local/bin/python3 "$ESPOTA" -i "$IP" -p "$OTA_PORT" -a "$OTA_PASS" -f "$FW" -d -r
+python3 "$ESPOTA" -i "$IP" -p "$OTA_PORT" -a "$OTA_PASS" -f "$FW" -d -r
 rc=$?
+
 
 if [ $rc -eq 0 ]; then
   echo

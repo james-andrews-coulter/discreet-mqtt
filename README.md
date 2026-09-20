@@ -114,7 +114,7 @@ always the *net* (tared) value. Regression-tested in
 4. Flash via USB, later via ArduinoOTA (hostname `Discreet`, password
    `Discreet`).
 
-> BUILD STATUS (Aug 29, 2026): **FLASHED SUCCESSFULLY** to 192.168.0.156
+> BUILD STATUS (Aug 29, 2026): **FLASHED SUCCESSFULLY** to 192.168.x.x (yours)
 > via OTA (`Authenticating...OK` -> 100% -> `Result: OK`). Confirmed alive
 > after reboot: pings clean, and mDNS re-advertising `_arduino._tcp` proves
 > `loop()` is running (a crashed sketch stops advertising).
@@ -138,7 +138,7 @@ always the *net* (tared) value. Regression-tested in
 ArduinoOTA's discovery port is **UDP**, so a TCP connect probe reports
 "closed" on a machine that is perfectly reachable and flashable. That false
 negative wasted hours here - repeated LAN sweeps concluded "the machine is
-offline" while it was sitting at `192.168.0.156` answering pings.
+offline" while it was sitting at `192.168.x.x (yours)` answering pings.
 
 Use **mDNS** instead, which is what `flash-discreet.sh` now does:
 
@@ -149,31 +149,24 @@ dns-sd -L discreet _arduino._tcp local   # TXT record: board=esp32
 ```
 
 The `_arduino._tcp` TXT record is also a useful identity check: it reports
-`board=esp32`, whereas ss-xiao is an `esp32s3`.
+`board=esp32`.
 
 ### ⚠ Flashing: do NOT just pick the first device on port 3232
 
-**Other ESP32s on this LAN also listen on OTA port 3232.** In particular
-`192.168.0.166` is the **ss-xiao garden waterer** (ESPHome), which is *not*
-the espresso machine. A naive "scan for 3232 and flash it" would overwrite
-that device's firmware.
+**Other ESP32s on this LAN also listen on OTA port 3232.** Ensure you target the espresso machine, not another ESP32 on your LAN. A naive "scan for 3232 and flash it" would overwrite that device's firmware.
 
 `flash-discreet.sh` therefore verifies identity before offering a target:
 
-1. **denylist** of known-other ESP32 IPs - the only check that still works
-   when that device is offline (ss-xiao has an intermittent 5V press-fit
-   header fault and drops off the network, so it may be absent during the
-   scan and back later);
-2. **port 6053 closed** - ESPHome exposes its native API there, the Discreet
-   Arduino firmware never does. This is the reliable discriminator; note
-   ss-xiao has no `web_server`, so checking port 80 alone is NOT enough;
+1. **denylist** of known-other ESP32 IPs - the only check that still works when that device is offline;
+2. **port 6053 closed** - ESPHome exposes its native API there, the Discreet Arduino firmware never does;
 3. **port 80 closed** - the MQTT conversion removed the web server;
 4. **positive confirmation** - requires a live `discreet/telemetry` packet on
    the broker (also reused for the mid-shot safety check). If it cannot be
    confirmed, the script says so loudly before the final prompt;
 5. refuses to guess if multiple candidates survive.
 
-If you add another ESP32 to the LAN, add its IP to `DENY_IPS` in the script.
+If you add another ESP32 to the LAN, add its IP to `DENY_IPS` in the script (or override via `$DISCREET_DENY_IPS`).
+
 
 ## Predictive cut (why yield lands on target)
 
