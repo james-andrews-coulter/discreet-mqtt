@@ -1,0 +1,11 @@
+# Copy this to .mqtt_creds and fill in your values.
+# This file is gitignored and used by flash-discreet.sh for MQTT identity verification.
+
+# Mosquitto broker host (IP or hostname)
+MQTT_HOST="192.168.1.50"
+
+# MQTT username (the 'discreet' user created in Mosquitto add-on)
+DISCREET_MQTT_USER="discreet"
+
+# MQTT password for the 'discreet' user
+DISCREET_MQTT_PW="your_mqtt_password_here"

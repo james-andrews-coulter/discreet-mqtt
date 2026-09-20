@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Host tests (no hardware)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+      - name: Run test suites
+        run: cd test && ./run-tests.sh
+        env:
+          CC: gcc
+          CXX: g++
+
+  yamllint:
+    name: Validate YAML package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install yamllint
+        run: pipx install yamllint
+      - name: Lint packages/discreet.yaml
+        run: yamllint -c .yamllint.yaml packages/discreet.yaml
+
+  shellcheck:
+    name: Lint flash-discreet.sh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Lint flash-discreet.sh
+        run: shellcheck flash-discreet.sh

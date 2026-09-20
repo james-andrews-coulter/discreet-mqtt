@@ -114,6 +114,12 @@ always the *net* (tared) value. Regression-tested in
 4. Flash via USB, later via ArduinoOTA (hostname `Discreet`, password
    `Discreet`).
 
+> **MQTT credentials for flash-discreet.sh** (optional but recommended):
+> copy `.mqtt_creds.example` to `.mqtt_creds` and fill in your broker
+> host/user/pass. The script uses this to positively confirm the target
+> machine via live `discreet/telemetry` before flashing. Without it, the
+> script falls back to mDNS + port checks only.
+
 > BUILD STATUS (Aug 29, 2026): **FLASHED SUCCESSFULLY** to 192.168.x.x (yours)
 > via OTA (`Authenticating...OK` -> 100% -> `Result: OK`). Confirmed alive
 > after reboot: pings clean, and mDNS re-advertising `_arduino._tcp` proves
@@ -208,7 +214,7 @@ Compiles both suites with `-Wall -Wextra -Werror -O2` and runs them.
   clamp, and every safety rule (unarmed never cuts, cut latches once,
   negative weight never cuts, missing cup never cuts).
 
-Both suites pass: **94/94**.
+Both suites pass: **105/105**.
 
 > Note on the trailer bytes: GaggiMate defines a `calculateChecksum()`
 > ("sum of all bytes except the last") but never calls it. Do **not** add
@@ -325,6 +331,49 @@ scale fields: `weight` (live NET grams), `targetweight`, `shotweight`
   core 2.x. The dimmer library pins the core to 2.x, so use NimBLE 1.4.3.
 - A single BLE client object is reused across reconnects: NimBLE 1.4.3
   caps simultaneous clients, and creating one per attempt leaks them.
+
+## Hardware requirements
+
+| Component | Spec / Notes |
+|-----------|--------------|
+| ESP32 board | Classic ESP32 (not S2/S3/C3). Tested on ESP32 DevKit v1 / ESP-WROOM-32. Must fit inside the Discreet enclosure. |
+| MAX6675 | Thermocouple amplifier (SPI). Wired to GPIO 19 (MISO), 23 (SCK), 18 (CS). |
+| SSR | Fotek SSR-25 DA or equivalent (3-32 VDC control, 240 VAC load). Driven from GPIO 25 (active-high). |
+| Scale | `MY_SCALE` (TI CC254x, service `0000FFB0...`). **Must** be this exact model; WeighMyBru / Bean Conqueror scales use a different protocol and will not work. |
+| SD card | MicroSD, formatted FAT32. Holds `config.json` at root. |
+| Power | 5 V / 2 A USB-C supply to the ESP32 (the Discreet board regulates internally). |
+
+Wiring matches the original Discreet hardware. See `docs/upstream/` for the GaggiMate reference schematic.
+
+## SD card layout
+
+Insert the SD card into the ESP32 board **before first boot**. The firmware expects `config.json` at the **root** of the card:
+
+```
+/config.json        <- your WiFi + MQTT + PID settings
+```
+
+The firmware will create/overwrite this file when you press **Save Config** in HA (writes current runtime settings to survive reboot).
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `discreet.local` doesn't resolve | mDNS not working / machine on different subnet | Find IP in router DHCP table, flash with `./flash-discreet.sh <ip>` |
+| OTA upload hangs at "Authenticating..." | Wrong IP (flashing another ESP32) / sketch crashed | Verify identity checks pass; if sketch crashed, flash over USB |
+| Scale never connects (`Scale connected` never appears) | Scale asleep / wrong scale model / BLE interference | Wake scale (press button); confirm it's `MY_SCALE`; move other BLE devices away |
+| Weight reads ~0 g with cup on scale | Tare not run / scale factor wrong | Press **Tare Scale** in HA; verify with known mass (500 g) |
+| Shot auto-cuts way early / way late | `BBW_LEAD_TIME_S` needs tuning | Adjust the `#define` in the sketch (default 0.35 s); see Predictive cut section |
+| Entities missing in HA after package install | Packages not enabled / HA not restarted | Add `packages: !include_dir_named packages` to `configuration.yaml`, restart HA |
+| `flash-discreet.sh` says "could not find the Discreet controller" | Machine off / crashed / different subnet | Ping `discreet.local`; check router; flash over USB if needed |
+
+## Common pitfalls
+
+- **Do not use ESP32 Arduino core 3.x** — binary exceeds OTA slot. Core **2.0.17** is required.
+- **Do not use NimBLE-Arduino 2.x** — API incompatible. **1.4.3** is required.
+- **The scale deep-sleeps aggressively** (~2-3 min). Wake it before every shot or BBW won't arm.
+- **MQTT broker must be running** before the ESP32 boots, or it will retry forever (harmless but noisy).
+- **Only one BLE client** is created and reused. Reconnect logic handles drops; do not power-cycle the scale mid-shot.
 
 ## Not yet done
 

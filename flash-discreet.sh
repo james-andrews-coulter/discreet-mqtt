@@ -18,18 +18,36 @@ SKETCH_DIR="$HOME/discreet-mqtt"
 FW="$SKETCH_DIR/build/Discreet_MQTT.ino.bin"
 OTA_PORT=3232
 OTA_PASS="Discreet"
-ESPOTA="${ESPOTA:-$HOME/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/espota.py}"
+
+# Locate espota.py cross-platform.
+# Arduino CLI installs cores under:
+#   macOS: ~/Library/Arduino15/packages/esp32/hardware/esp32/<version>/tools/espota.py
+#   Linux: ~/.arduino15/packages/esp32/hardware/esp32/<version>/tools/espota.py
+# Allow override via $ESPOTA.
+if [ -z "${ESPOTA:-}" ]; then
+  CORE_VERSION="2.0.17"
+  CANDIDATES=(
+    "$HOME/Library/Arduino15/packages/esp32/hardware/esp32/$CORE_VERSION/tools/espota.py"
+    "$HOME/.arduino15/packages/esp32/hardware/esp32/$CORE_VERSION/tools/espota.py"
+  )
+  for c in "${CANDIDATES[@]}"; do
+    if [ -f "$c" ]; then
+      ESPOTA="$c"
+      break
+    fi
+  done
+fi
 
 # Known-other ESP32s on this LAN that ALSO listen on OTA port 3232 and must
 # never be flashed with espresso firmware (e.g. ESPHome devices). Add any future ESP32 here.
 # example LAN IP — override via $DISCREET_DENY_IPS; add your other ESP32s here
-DENY_IPS=(${DISCREET_DENY_IPS:-"192.168.0.166"})
+DENY_IPS=("${DISCREET_DENY_IPS:-192.168.0.166}")
 
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-[ -f "$FW" ] || die "firmware not found at $FW - build it first:
-  cd $SKETCH_DIR && arduino-cli compile --fqbn esp32:esp32:esp32 Discreet_MQTT --output-dir build"
+[ -f "$FW" ] || die "firmware not found at $FW - build it first:\n  cd $SKETCH_DIR && arduino-cli compile --fqbn esp32:esp32:esp32 Discreet_MQTT --output-dir build"
+[ -n "${ESPOTA:-}" ] || die "espota.py not found. Install ESP32 Arduino core 2.0.17 via arduino-cli, or set \$ESPOTA to its path."
 [ -f "$ESPOTA" ] || die "espota.py not found at $ESPOTA (is ESP32 core 2.0.17 installed?)"
 
 SIZE=$(stat -f%z "$FW")
@@ -130,7 +148,7 @@ echo "target:   $IP:$OTA_PORT"
 # doubles as the mid-shot safety check below.
 TELEMETRY=""
 if command -v mosquitto_sub >/dev/null 2>&1 && [ -f "$SKETCH_DIR/.mqtt_creds" ]; then
-  # shellcheck disable=SC1090
+  # shellcheck disable=SC1091
   . "$SKETCH_DIR/.mqtt_creds"
   TELEMETRY=$(mosquitto_sub -h "${MQTT_HOST:-localhost}" \
                 -u "${DISCREET_MQTT_USER:-}" -P "${DISCREET_MQTT_PW:-}" \
