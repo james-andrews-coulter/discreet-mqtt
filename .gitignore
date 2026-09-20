@@ -12,3 +12,8 @@ config.json
 test/*.out
 test/test_myscale
 test/test_bbw
+
+# Local toolchain (per-machine, regenerate via arduino-cli)
+arduino-home/
+arduino-cli.local.yaml
+
