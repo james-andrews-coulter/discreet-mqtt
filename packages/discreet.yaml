@@ -1,3 +1,4 @@
+# Discreet package: drop into <ha-config>/packages/discreet.yaml, restart HA. Requires Mosquitto + MQTT integration + 'homeassistant: {packages: !include_dir_named packages}' in configuration.yaml.
 # =====================================================================
 # Discreet espresso controller -> Home Assistant (MQTT bridge)
 # Firmware: ~/discreet-mqtt/Discreet_MQTT.ino (flashed over ArduinoOTA)
