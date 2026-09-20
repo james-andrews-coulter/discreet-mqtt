@@ -1,0 +1,3 @@
+Discreet-MQTT: GPLv3 (derivative of https://github.com/Discreet-Coffee/Discreet, GPLv3).
+docs/upstream/myscale.cpp|.h: GaggiMate esp-arduino-ble-scales, MIT (https://github.com/gaggimate/esp-arduino-ble-scales).
+docs/blackcoffeeScale.ts: BeanConqueror, GPLv3 (https://github.com/graphefruit/Beanconqueror).

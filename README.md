@@ -332,3 +332,9 @@ scale fields: `weight` (live NET grams), `targetweight`, `shotweight`
   reads 500.0.
 - `FFB1` command bytes beyond tare, and the byte 18-19 checksum, remain
   undocumented. Neither is needed.
+
+## License
+
+GPLv3 — derivative of https://github.com/Discreet-Coffee/Discreet (GPLv3).
+Scale decode cross-checked against GaggiMate esp-arduino-ble-scales (MIT, see docs/upstream/) and BeanConqueror (GPLv3, see docs/blackcoffeeScale.ts).
+
