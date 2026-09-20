@@ -120,6 +120,10 @@ bool cutOnScaleLoss = false;          // config: hard-cut if scale dies mid-shot
 bool pumpCutByWeight = false;         // forces pump output to 0
 bool shotCutByWeight = false;         // this shot already auto-cut
 float shotWeight = 0.0f;              // NET weight at the moment of the cut
+bool shotTimeLatched = false;         // actime frozen at BBW cut (timer stops)
+float shotTempMin = 0.0f, shotTempMax = 0.0f;  // boiler extremes, this shot
+double shotPressSum = 0;              // extraction-phase pressure accumulator
+unsigned long shotPressN = 0;         // ... sample count (avg = sum / n)
 
 // --- Predictive cut tuning ---
 // The pump keeps delivering, and the puck keeps dripping, for a short time
@@ -339,6 +343,7 @@ void steam() {
 // ------------------------------------------------------------------
 const char* currentShotState() {
   if (!acDetected) return "idle";
+  if (shotCutByWeight) return "done";   // pump cut, switch still on
   if (preinftime > 0 && actime < preinftime) return "preinfusion";
   if (bloomtime > 0 && actime < preinftime + bloomtime) return "bloom";
   return "extraction";
@@ -385,6 +390,26 @@ void publishTelemetry() {
   String out;
   serializeJson(doc, out);
   mqtt.publish((mqttTopic + "/telemetry").c_str(), out.c_str(), false);
+}
+
+// Retained per-shot summary for the HA history tab. Published once at shot
+// end (brew switch off); retained so the snapshot survives HA restarts.
+// Temps are user-facing (offset subtracted), matching telemetry.
+void publishLastShot() {
+  if (!mqtt.connected()) return;
+
+  StaticJsonDocument<256> doc;
+  doc["time_s"] = actime;
+  doc["avg_pressure"] = shotPressN > 0
+    ? round((shotPressSum / shotPressN) * 10) / 10.0 : 0.0;
+  doc["yield_g"] = round(shotWeight * 10) / 10.0;
+  doc["target_g"] = targetWeight;
+  doc["temp_min"] = round((shotTempMin - offset) * 10) / 10.0;
+  doc["temp_max"] = round((shotTempMax - offset) * 10) / 10.0;
+
+  String out;
+  serializeJson(doc, out);
+  mqtt.publish((mqttTopic + "/lastshot").c_str(), out.c_str(), true);
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
@@ -530,6 +555,9 @@ void loadSDConfig() {
     Kp = doc["Kp"] | Kp;
     Ki = doc["Ki"] | Ki;
     Kd = doc["Kd"] | Kd;
+    pressuresetpoint = doc["pressuresetpoint"] | pressuresetpoint;
+    preinftime = doc["preinftime"] | preinftime;
+    bloomtime = doc["bloomtime"] | bloomtime;
     setpoint = doc["setpoint"] | setpoint;
     offset = doc["offset"] | offset;
     steamSetpoint = doc["steamSetpoint"] | steamSetpoint;
@@ -542,6 +570,7 @@ void loadSDConfig() {
     setpoint = setpoint + offset;
     setpointBoot = setpoint;
     steamSetpoint = steamSetpoint + offset;
+    pumppower = basePumpPowerForSetpoint(pressuresetpoint);
   } else {
     Serial.println("No /config.json found - using defaults");
     Kp = 80; Ki = 6; Kd = 55;
@@ -596,6 +625,9 @@ void saveConfigToSD() {
   doc["Kp"] = Kp;
   doc["Ki"] = Ki;
   doc["Kd"] = Kd;
+  doc["pressuresetpoint"] = pressuresetpoint;
+  doc["preinftime"] = preinftime;
+  doc["bloomtime"] = bloomtime;
   doc["setpoint"] = setpoint - offset;
   doc["offset"] = offset;
   doc["steamSetpoint"] = steamSetpoint - offset;
@@ -934,6 +966,11 @@ void loop() {
       shotCutByWeight = false;
       pumpCutByWeight = false;
       shotWeight = 0.0f;
+      shotTimeLatched = false;
+      shotTempMin = input;
+      shotTempMax = input;
+      shotPressSum = 0;
+      shotPressN = 0;
       if (bbwEnabled) {
         if (scaleConnected) {
           scaleTareNow();   // hardware tare (best effort) + software tare offset
@@ -947,9 +984,21 @@ void loop() {
       }
     }
 
-    // Calculate shot time
-    elapsedTime = millis() - acDetectedTime;
-    actime = elapsedTime / 1000;
+    // Calculate shot time (frozen at the BBW cut moment, if cut)
+    if (!shotTimeLatched) {
+      elapsedTime = millis() - acDetectedTime;
+      actime = elapsedTime / 1000;
+    }
+
+    // Per-shot snapshot accumulators: boiler extremes all shot long,
+    // pressure average over the extraction phase only (pre-infusion would
+    // drag it down; post-cut fall-off is excluded via the latch).
+    if (input < shotTempMin) shotTempMin = input;
+    if (input > shotTempMax) shotTempMax = input;
+    if (actime >= preinftime + bloomtime && !shotTimeLatched) {
+      shotPressSum += currentPressure;
+      shotPressN++;
+    }
 
     // --- PRE-INFUSION ---
     if (preinftime > 0 && actime < preinftime) {
@@ -1031,6 +1080,7 @@ void loop() {
       if (net >= (targetWeight - lead)) {
         pumpCutByWeight = true;
         shotCutByWeight = true;
+        shotTimeLatched = true;      // freeze the shot timer at the cut
         shotWeight = net;
         setPumpOutput(0);              // cut immediately, don't wait for SetPump()
         beepBuzzer(2, 400, 150);
@@ -1054,6 +1104,7 @@ void loop() {
     else offcount = 0;
 
     if (offcount >= 100) {
+      publishLastShot();   // retained snapshot before the flags clear
       acDetected = false;
       shotStarted = false;
       pumpPowerSetPreinf = false;

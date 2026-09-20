@@ -382,6 +382,13 @@ automation:
         entity_id: sensor.discreet_shot_state
         to: ["preinfusion", "extraction", "bloom"]
         from: ["idle", "unknown", "unavailable"]
+    # Steam-release flush (steam valve + group head open after frothing)
+    # also drives shotstate -> would over-count. Gate on steam OFF.
+    # ponytail: duration/weight gate if a steam-OFF flush ever appears.
+    condition:
+      - condition: state
+        entity_id: binary_sensor.discreet_steam_mode
+        state: "off"
     action:
       - service: counter.increment
         target:
