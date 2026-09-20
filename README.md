@@ -19,7 +19,7 @@ telemetry.
 
 ## Files
 
-- `Discreet_MQTT.ino`  - firmware (MQTT + BLE scale client)
+- `Discreet_MQTT.ino`  - firmware (MQTT + BLE scale client). `Discreet_MQTT.ino` (root) is a symlink to `Discreet_MQTT/Discreet_MQTT.ino` for CLI convenience; edit the real file.
 - `ha-configuration.yaml` - MQTT entity definitions (merge into HA)
 - `dashboard.yaml`     - Lovelace dashboard (import from YAML)
 - `docs/my-scale-ble-protocol.md` - **verified** BLE protocol for the scale
