@@ -244,21 +244,26 @@ Checks worth doing once:
 ## 3. Home Assistant
 
 1. Add the **Mosquitto broker** add-on; enable the MQTT integration.
-2. Merge the `mqtt:` block from `ha-configuration.yaml` into your
-   `configuration.yaml` (or `packages/`). Restart HA.
-3. Reload MQTT / wait ~1 min: entities appear, including the new ones -
-   `sensor.discreet_scale_weight`, `sensor.discreet_shot_weight`,
-   `sensor.discreet_flow_rate`, `binary_sensor.discreet_scale_connected`,
-   `binary_sensor.discreet_bbw_armed`, `binary_sensor.discreet_scale_stable`,
-   `number.discreet_target_weight`, `switch.discreet_brew_by_weight`,
-   `button.discreet_tare_scale`.
-4. Create the dashboard from `dashboard.yaml` (add dashboard -> new
-   dashboard from YAML). Adjust entity ids if HA renamed them.
+2. In your HA `configuration.yaml`, ensure packages are enabled:
+   ```yaml
+   homeassistant:
+     packages: !include_dir_named packages
+   ```
+   Drop `packages/discreet.yaml` into `<ha-config>/packages/discreet.yaml` and restart Home Assistant.
+3. Reload MQTT / wait ~1 min: entities appear, including `sensor.discreet_scale_weight`, `sensor.discreet_shot_weight`, `sensor.discreet_flow_rate`, `binary_sensor.discreet_scale_connected`, `binary_sensor.discreet_bbw_armed`, `binary_sensor.discreet_scale_stable`, `number.discreet_target_weight`, `switch.discreet_brew_by_weight`, `button.discreet_tare_scale`.
+4. Import the dashboard:
+   - `Settings → Dashboards → Add Dashboard`
+   - Name it (e.g. `Discreet`), open it
+   - Click `⋮` (top right) → `Raw configuration editor`
+   - Delete placeholder content
+   - Paste full contents of `dashboard.yaml` → `Save`
+   - Confirm 3 views (Main, Settings, Statistics) render cleanly.
 
 The Main view gains a big gold **Weight** readout with a status line that
 reads `Armed - auto-stop at 36 g`, `Scale ready`, `No scale - manual
 shot`, or `BBW Off`, plus a Brew by Weight control block and a
 weight/flow history graph.
+
 
 ## MQTT topic reference
 
@@ -323,17 +328,19 @@ scale fields: `weight` (live NET grams), `targetweight`, `shotweight`
 
 ## Not yet done
 
-- **Flash + bench test.** The firmware compiles but has not been flashed;
-  the machine was not reachable on the network during this work.
-- **Confirm the milligram scale factor against a known mass.** Both
-  reference implementations divide by 1000 and the captured zero packet is
-  consistent, but a single reading of a known weight would make it
-  certain. Put e.g. a 500 g mass on the scale and check the dashboard
-  reads 500.0.
+- **Bench-untested:** ESP32-side BLE link + deferred tare + predictive cut during a live extraction (only exercised from macOS/bleak so far).
 - `FFB1` command bytes beyond tare, and the byte 18-19 checksum, remain
   undocumented. Neither is needed.
 
+## HACS / Native Integration Assessment
+
+**Verdict: DO NOT BUILD a native Python HACS integration.**
+1. The static YAML package (`packages/discreet.yaml`) is fully functional today across 29 entities.
+2. An HA MQTT discovery implementation would allow zero-YAML setup in firmware with zero Python maintenance burden, whereas a custom component adds ongoing HA core version churn without new capabilities (shot logic remains on the ESP32 by design).
+3. Lovelace dashboard YAML is not automatically installable via HACS integration components anyway.
+
 ## License
+
 
 GPLv3 — derivative of https://github.com/Discreet-Coffee/Discreet (GPLv3).
 Scale decode cross-checked against GaggiMate esp-arduino-ble-scales (MIT, see docs/upstream/) and BeanConqueror (GPLv3, see docs/blackcoffeeScale.ts).

@@ -2,8 +2,7 @@
 # ------------------------------------------------------------------
 # flash-discreet.sh - OTA-flash the Discreet MQTT+BBW firmware.
 #
-# The machine was NOT reachable when this firmware was built, so it has
-# never been flashed. Run this when the machine is powered on and idle.
+# Run this when the machine is powered on and idle.
 #
 # Usage:
 #   ./flash-discreet.sh              # auto-discover the machine, then flash
