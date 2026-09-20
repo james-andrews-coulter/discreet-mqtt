@@ -332,13 +332,6 @@ scale fields: `weight` (live NET grams), `targetweight`, `shotweight`
 - `FFB1` command bytes beyond tare, and the byte 18-19 checksum, remain
   undocumented. Neither is needed.
 
-## HACS / Native Integration Assessment
-
-**Verdict: DO NOT BUILD a native Python HACS integration.**
-1. The static YAML package (`packages/discreet.yaml`) is fully functional today across 29 entities.
-2. An HA MQTT discovery implementation would allow zero-YAML setup in firmware with zero Python maintenance burden, whereas a custom component adds ongoing HA core version churn without new capabilities (shot logic remains on the ESP32 by design).
-3. Lovelace dashboard YAML is not automatically installable via HACS integration components anyway.
-
 ## License
 
 
