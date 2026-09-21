@@ -1,5 +1,7 @@
 # Discreet → Home Assistant (MQTT + brew-by-weight)
 
+> Built on **[Discreet](https://github.com/Discreet-Coffee/Discreet)** — the open-source ESP32 espresso controller (PID, pressure profiling, pre-infusion). This repo replaces its SD-card web UI with Home Assistant + adds brew-by-weight.
+
 ![Discreet HA dashboard — Run, Settings, History tabs](docs/dashboard.png)
 *Main, Settings and History views (machine offline — live values show when connected).*
 
