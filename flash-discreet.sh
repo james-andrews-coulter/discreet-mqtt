@@ -14,7 +14,9 @@
 # ------------------------------------------------------------------
 set -uo pipefail
 
-SKETCH_DIR="$HOME/discreet-mqtt"
+# Resolve repo root from this script's location; allow $SKETCH_DIR override
+# for non-standard checkouts.
+SKETCH_DIR="${SKETCH_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 FW="$SKETCH_DIR/build/Discreet_MQTT.ino.bin"
 OTA_PORT=3232
 OTA_PASS="Discreet"
