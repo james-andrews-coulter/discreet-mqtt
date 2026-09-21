@@ -1,5 +1,8 @@
 # Discreet → Home Assistant (MQTT + brew-by-weight)
 
+![Discreet HA dashboard — Run, Settings, History tabs](docs/dashboard.png)
+*Main, Settings and History views (machine offline — live values show when connected).*
+
 Replaces the Discreet web UI with a Home Assistant dashboard and adds auto-stop by weight using a `MY_SCALE` Bluetooth scale. Assumes your Discreet machine is already built and working.
 
 ---
